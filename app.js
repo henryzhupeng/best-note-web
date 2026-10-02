@@ -6633,7 +6633,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.19',
+      version: '7.20',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -7798,7 +7798,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.19',
+      version: '7.20',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
