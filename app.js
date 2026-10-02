@@ -1060,8 +1060,19 @@
     `;
   }
 
+  function updateChrome() {
+    const inWorkspace = state.route === 'workspace';
+    document.body.classList.toggle('workspace-mode', inWorkspace);
+    const sidebar = document.querySelector('.sidebar');
+    const workspaceBrand = document.querySelector('.workspace-brand');
+    const mobileBrand = document.querySelector('.mobile-brand');
+    if (sidebar) sidebar.style.display = inWorkspace ? 'none' : '';
+    if (workspaceBrand) workspaceBrand.style.display = inWorkspace ? 'flex' : 'none';
+    if (mobileBrand) mobileBrand.style.display = inWorkspace ? 'none' : '';
+  }
+
   function render() {
-    document.body.classList.toggle('workspace-mode', state.route === 'workspace');
+    updateChrome();
     if (state.route === 'workspace') root.innerHTML = renderWorkspace();
     if (state.route === 'home') root.innerHTML = renderHome();
     if (state.route === 'notes') root.innerHTML = renderNotes();
@@ -6622,7 +6633,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.18',
+      version: '7.19',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -7787,7 +7798,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.18',
+      version: '7.19',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
