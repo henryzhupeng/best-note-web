@@ -1,4 +1,4 @@
-/* 任意笔记 Best Note - Web MVP prototype
+/* 优记 BestNote - Web MVP prototype
  * OCR 与 AI 整理均使用浏览器端真实识别，并按模板整理内容。
  */
 (() => {
@@ -97,6 +97,51 @@
       icon: '◒',
       description: '食材 · 步骤 · 火候 · 复盘',
       noteType: 'cooking'
+    }
+  };
+
+  const textTemplates = {
+    auto: {
+      name: '智能推荐',
+      icon: '✦',
+      description: '识别内容类型，自动选择结构',
+      sample: ['课堂内容 → 分层大纲', '会议内容 → 行动项']
+    },
+    raw: {
+      name: '原样整理',
+      icon: '≡',
+      description: '保留原始段落和表格结构',
+      sample: ['正文段落', '原始表格']
+    },
+    classroom: {
+      name: '课堂笔记',
+      icon: '◇',
+      description: '去冗余，提炼重点和复习清单',
+      sample: ['核心概念', '重点 / 难点', '复习清单']
+    },
+    wrong_question: {
+      name: '错题整理',
+      icon: '△',
+      description: '拆分题干、答案、错误原因和考点',
+      sample: ['题干', '答案', '错误原因 / 考点']
+    },
+    tech_doc: {
+      name: '技术文档',
+      icon: '⚙',
+      description: '提取参数，整理为 Markdown 表格',
+      sample: ['参数名 / 值 / 说明', '注意事项']
+    },
+    reading: {
+      name: '阅读摘录',
+      icon: '▤',
+      description: '摘要、关键词、摘录和行动',
+      sample: ['内容摘要', '关键词', '我的行动']
+    },
+    meeting: {
+      name: '会议纪要',
+      icon: '▦',
+      description: '提取结论、行动项、责任人和时间',
+      sample: ['会议结论', '行动项 / 负责人 / 时间']
     }
   };
 
@@ -308,7 +353,7 @@
     },
     {
       id: 'example-meeting',
-      title: '任意笔记 v7 产品评审会纪要',
+      title: '优记 v7 产品评审会纪要',
       type: 'meeting',
       folder: '工作',
       tags: ['会议', '产品', '规划'],
@@ -327,7 +372,7 @@
     },
     {
       id: 'example-project',
-      title: '任意笔记 Web v7 迭代计划',
+      title: '优记 Web v7 迭代计划',
       type: 'project',
       folder: '工作',
       tags: ['项目', '产品', '计划'],
@@ -371,6 +416,8 @@
     ocrTitleSuggestions: [],
     ocrTags: [],
     ocrFolder: '未分类',
+    ocrKeepSources: true,
+    aiKeepSources: true,
     ocrDraftHtml: '',
     ocrLang: 'chi_sim+eng',
     ocrEngine: 'local',
@@ -381,6 +428,8 @@
     pasteBlocks: [],
     pasteTitle: '',
     pasteTitleSuggestions: [],
+    pasteTemplate: 'auto',
+    pasteStructuredHtml: '',
     pasteRenderMode: 'auto',
     pasteFilterIrrelevant: true,
     pasteParsed: false,
@@ -406,6 +455,8 @@
   const sourceAssetMemory = new Map();
   let activeSourceObjectUrl = null;
   let draggedSection = null;
+  let saveStatusTimer = null;
+  let activeTheme = localStorage.getItem('best-note-theme') || 'light';
   const root = document.getElementById('view-root');
   const toastRegion = document.getElementById('toast-region');
   const modalRoot = document.getElementById('modal-root');
@@ -440,6 +491,26 @@
       const timer = setTimeout(() => finish(typeof fallback === 'function' ? fallback() : fallback), timeoutMs);
       Promise.resolve(promise).then((value) => finish(value)).catch(() => finish(typeof fallback === 'function' ? fallback() : fallback));
     });
+  }
+
+  function applyTheme() {
+    document.documentElement.dataset.theme = activeTheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', activeTheme === 'dark' ? '#0f172a' : '#2563eb');
+  }
+
+  function toggleTheme() {
+    activeTheme = activeTheme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('best-note-theme', activeTheme);
+    applyTheme();
+    toast(activeTheme === 'dark' ? '已切换到深色模式。' : '已切换到浅色模式。', 'success');
+  }
+
+  function setSaveStatus(text, tone = '') {
+    const status = document.getElementById('save-status');
+    if (!status) return;
+    status.textContent = text;
+    status.classList.toggle('saving', tone === 'saving');
+    status.classList.toggle('saved', tone === 'saved');
   }
 
   function openDatabase() {
@@ -656,7 +727,8 @@
         customFolders: structuredClone(state.customFolders),
         stats: structuredClone(state.stats),
         noteCount: state.notes.length,
-        deletedCount: state.deletedNotes.length
+        deletedCount: state.deletedNotes.length,
+        titles: state.notes.slice(0, 6).map((note) => note.title)
       }));
       const readTransaction = database.transaction(DB_HISTORY_STORE, 'readonly');
       const all = await idbRequest(readTransaction.objectStore(DB_HISTORY_STORE).getAll());
@@ -773,7 +845,36 @@
     }
   }
 
+  async function getAllAssetRecords() {
+    try {
+      const database = await openAssetDatabase();
+      const transaction = database.transaction(DB_ASSETS_STORE, 'readonly');
+      return await idbRequest(transaction.objectStore(DB_ASSETS_STORE).getAll());
+    } catch (error) {
+      console.warn('读取原图备份失败。', error);
+      return [];
+    }
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  function base64ToArrayBuffer(value) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes.buffer;
+  }
+
   function persist(options = {}) {
+    setSaveStatus('保存中…', 'saving');
     const payload = {
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -791,6 +892,8 @@
       state.historyLoaded = false;
       scheduleHistorySnapshot(options.reason || '自动保存');
     }
+    clearTimeout(saveStatusTimer);
+    saveStatusTimer = setTimeout(() => setSaveStatus('已自动保存', 'saved'), 450);
   }
 
   function structuredClone(value) {
@@ -820,6 +923,12 @@
         return;
       }
       [...element.attributes].forEach((attribute) => {
+        if (attribute.name === 'class') {
+          const safeClasses = attribute.value.split(/\s+/).filter((name) => ['apple-table-wrap', 'merged-section'].includes(name));
+          if (safeClasses.length) element.setAttribute('class', safeClasses.join(' '));
+          else element.removeAttribute('class');
+          return;
+        }
         if (!['colspan', 'rowspan', 'data-section-id'].includes(attribute.name)) element.removeAttribute(attribute.name);
       });
     });
@@ -842,6 +951,20 @@
       month: 'short',
       day: 'numeric'
     }).format(date);
+  }
+
+  function formatDateTime(dateValue) {
+    const date = new Date(dateValue);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).format(date).replaceAll('/', '-');
   }
 
   function getNoteById(id) {
@@ -883,7 +1006,7 @@
     const hasTable = /<table[\s>]/i.test(note.contentHtml || '');
     const sourceImage = note.sourceImages?.[0];
     const sourceControl = sourceImage?.thumbnail
-      ? `<button class="note-source-thumb" type="button" data-source-note="${escapeHtml(note.id)}" data-source-index="0" aria-label="查看原始截图"><img src="${sourceImage.thumbnail}" alt="原始截图缩略图" />${note.sourceImages.length > 1 ? `<span>+${note.sourceImages.length - 1}</span>` : ''}</button>`
+      ? `<button class="note-source-thumb" type="button" data-source-note="${escapeHtml(note.id)}" data-source-index="0" aria-label="查看原始截图"><img src="${sourceImage.thumbnail}" alt="原始截图缩略图" />${note.sourceImages.length > 1 ? `<span>${note.sourceImages.length}张</span>` : ''}</button>`
       : `<span class="note-type ${typeColor(note.type)}">${icons[note.type] || icons.general}</span>`;
     return `
       <article class="note-card ${state.noteSelectionMode ? 'selection-mode' : ''} ${selected ? 'selected' : ''} ${note.pinned ? 'pinned' : ''}" data-open-note="${escapeHtml(note.id)}" tabindex="0" role="button" aria-label="打开${escapeHtml(note.title)}">
@@ -934,6 +1057,7 @@
     if (state.route === 'ocr') root.innerHTML = renderOcr();
     if (state.route === 'paste') root.innerHTML = renderPaste();
     if (state.route === 'examples') root.innerHTML = renderExamples();
+    if (state.route === 'backup') root.innerHTML = renderBackup();
     if (state.route === 'history') {
       root.innerHTML = renderHistory();
       if (!state.historyLoading && !state.historyLoaded) loadHistoryIntoState();
@@ -974,30 +1098,30 @@
     return `
       <section class="home-hero-compact">
         <div class="home-hero-copy">
-          <span class="hero-badge">✦ 截图 · 表格 · AI 结果整理器</span>
-          <h2>把散落的截图，变成可编辑的结构化笔记</h2>
-          <p>批量截图、表格截图和 AI 识别结果，统一整理成标题、标签、正文和表格。先编辑，最后保存。</p>
+          <span class="hero-badge">✦ 网页 AI 笔记</span>
+          <h2>粘贴文字，一键结构化整理</h2>
+          <p>免注册 · 本地存储。无论文字来自图片 OCR、苹果备忘录还是豆包/Kimi/ChatGPT，都可以自动提炼大纲、错题、参数表、阅读摘要和会议行动项。</p>
           <div class="hero-actions">
-            <button class="btn" data-route="import">整理截图</button>
-            <button class="btn secondary" data-route="paste">粘贴 AI 结果</button>
-            <button class="btn secondary" data-route="examples">看真实示例</button>
+            <button class="btn" data-route="paste">开始 AI 结构化</button>
+            <button class="btn secondary" data-route="ocr">图片提取文字</button>
+            <button class="btn secondary" data-route="examples">查看示例</button>
           </div>
         </div>
         <div class="home-quick-panel">
-          <button class="home-quick-item" data-route="import">
-            <span class="home-quick-icon">◫</span>
-            <strong>截图成表</strong>
-            <small>健身、会议、项目、学习记录</small>
+          <button class="home-quick-item" type="button" data-home-template="classroom">
+            <span class="home-quick-icon">◇</span>
+            <strong>课堂笔记</strong>
+            <small>去冗余，提炼重点和复习清单</small>
           </button>
-          <button class="home-quick-item" data-route="paste">
-            <span class="home-quick-icon">⇧</span>
-            <strong>AI 结果落地</strong>
-            <small>粘贴豆包、Kimi、ChatGPT 结果</small>
+          <button class="home-quick-item" type="button" data-home-template="wrong_question">
+            <span class="home-quick-icon">△</span>
+            <strong>错题整理</strong>
+            <small>题干、答案、错误原因和考点</small>
           </button>
-          <button class="home-quick-item" data-route="notes">
-            <span class="home-quick-icon">▤</span>
-            <strong>继续整理</strong>
-            <small>搜索、标签、表格和历史版本</small>
+          <button class="home-quick-item" type="button" data-home-template="meeting">
+            <span class="home-quick-icon">▦</span>
+            <strong>会议纪要</strong>
+            <small>提取行动项、负责人和时间</small>
           </button>
         </div>
       </section>
@@ -1005,19 +1129,19 @@
       <section class="home-quick-bar">
         <div class="home-quick-meta">
           <span><strong>${state.notes.length}</strong> 条笔记</span>
-          <span>识别 → 编辑 → 保存</span>
-          <span>本地存储 · 不上传</span>
+          <span>粘贴 → AI 结构化 → 保存</span>
+          <span>免注册 · 本地存储</span>
         </div>
         ${mobileImportActions(true)}
       </section>
 
       <details class="home-why">
-        <summary>适合什么场景 <span>截图成表 · AI 结果归档 · 识别后编辑 · 本地整理</span></summary>
+        <summary>为什么不是苹果备忘录 <span>苹果便签原样提取 · BestNote 结构化加工</span></summary>
         <div class="home-benefit-list">
-          <p><strong>截图成表</strong>把健身计划、会议截图、研报表格整理成可编辑表格。</p>
-          <p><strong>AI 结果落地</strong>豆包、Kimi、ChatGPT 识别的文字可直接粘贴归档。</p>
-          <p><strong>识别后编辑</strong>先改标题、标签和正文，确认后再保存，避免保存后返工。</p>
-          <p><strong>本地整理</strong>IndexedDB、版本历史、文件夹、备份和导出都在当前设备完成。</p>
+          <p><strong>苹果便签</strong>擅长系统级图片文字提取和原样保存。</p>
+          <p><strong>BestNote</strong>专注文字加工：提炼大纲、错题、参数表和会议行动项。</p>
+          <p><strong>文字来源自由</strong>可以直接粘贴苹果备忘录、豆包、Kimi、ChatGPT 的识别结果。</p>
+          <p><strong>本地优先</strong>免注册、IndexedDB、本地存储、版本历史和一键 JSON 备份。</p>
         </div>
       </details>
 
@@ -1096,6 +1220,56 @@
     `;
   }
 
+  function renderBackup() {
+    return `
+      ${pageHeader(
+        'Backup & Restore',
+        '数据备份',
+        '笔记默认只保存在当前浏览器。浏览器缓存被清理或更换设备时，需要提前导出备份。',
+        `<div class="page-head-actions">
+          <button class="btn" type="button" data-export-backup>导出完整备份</button>
+          <label class="btn secondary backup-import-button">导入备份<input id="backup-file-input" type="file" accept=".json,application/json" /></label>
+        </div>`
+      )}
+      <section class="backup-hero">
+        <span class="backup-icon">⛨</span>
+        <div>
+          <h2>推荐使用完整 JSON 备份</h2>
+          <p>完整备份包含笔记、标签、文件夹、版本相关数据和原始截图。恢复时通过“导入备份”即可合并回来。</p>
+        </div>
+      </section>
+      <div class="backup-grid">
+        <article class="backup-card">
+          <strong>什么时候备份</strong>
+          <p>建议每月一次，或在完成重要笔记、错题整理、会议归档后立即导出。</p>
+        </article>
+        <article class="backup-card">
+          <strong>备份保存到哪里</strong>
+          <p>下载后的 JSON 文件建议放进 iCloud Drive、OneDrive、坚果云或其他长期保存的位置。</p>
+        </article>
+        <article class="backup-card">
+          <strong>不要只依赖浏览器</strong>
+          <p>清除浏览器缓存、卸载浏览器或更换设备，可能导致本地笔记无法恢复。</p>
+        </article>
+        <article class="backup-card">
+          <strong>换设备怎么恢复</strong>
+          <p>在新设备打开 BestNote，进入数据备份，选择“导入备份”，再选中之前导出的 JSON 文件。</p>
+        </article>
+      </div>
+      <section class="backup-actions-panel">
+        <div>
+          <h3>其他导出方式</h3>
+          <p>Markdown 更适合放入 Obsidian、Notion 或长期文档管理。</p>
+        </div>
+        <button class="btn secondary" type="button" data-export-all-markdown>导出全部 Markdown</button>
+      </section>
+      <section class="backup-warning">
+        <strong>本地存储提示</strong>
+        <p>IndexedDB 适合免登录使用，但容量有限，也不等于云同步。重要内容请定期导出完整备份。</p>
+      </section>
+    `;
+  }
+
   function renderHistory() {
     const snapshots = state.historySnapshots || [];
     return `
@@ -1112,18 +1286,21 @@
         <div class="history-empty"><span class="loading-pulse">↺</span><h3>正在读取版本历史</h3><p>数据来自当前浏览器的 IndexedDB。</p></div>
       ` : snapshots.length ? `
         <div class="history-list">
-          ${snapshots.map((snapshot) => `
+          ${snapshots.map((snapshot) => {
+            const titles = snapshot.titles?.length ? snapshot.titles : (snapshot.notes || []).slice(0, 6).map((note) => note.title);
+            return `
             <article class="history-item">
               <div class="history-item-main">
                 <span class="history-dot">↺</span>
                 <div>
                   <strong>${escapeHtml(snapshot.reason || '自动保存')}</strong>
-                  <p>${formatDate(snapshot.createdAt, true)} · ${snapshot.noteCount || 0} 条笔记${snapshot.deletedCount ? ` · ${snapshot.deletedCount} 条回收站` : ''}</p>
+                  <p class="history-time">${formatDateTime(snapshot.createdAt)} · ${snapshot.noteCount || 0} 条笔记${snapshot.deletedCount ? ` · ${snapshot.deletedCount} 条回收站` : ''}</p>
+                  <p class="history-note-titles">包含：${escapeHtml(titles.length ? titles.join('、') : '无笔记内容')}${(snapshot.noteCount || 0) > titles.length ? '…' : ''}</p>
                 </div>
               </div>
               <button class="btn secondary small" type="button" data-restore-history="${snapshot.id}">恢复此版本</button>
             </article>
-          `).join('')}
+          `}).join('')}
         </div>
       ` : `
         <div class="history-empty"><span>↺</span><h3>还没有历史版本</h3><p>修改一条笔记后，这里会自动生成可恢复的快照。</p></div>
@@ -1388,6 +1565,7 @@
               <button class="btn secondary small" type="button" data-new-folder-context="ai">＋ 新建</button>
             </div>
           </label>
+          <label class="source-keep-toggle"><input id="ai-keep-sources" type="checkbox" ${state.aiKeepSources ? 'checked' : ''} /><span>保存原始截图（关闭后只保留文字，更省空间）</span></label>
           <div class="generated-content-preview" id="ai-generated-content" contenteditable="true" spellcheck="false">${sanitizeHtml(note.contentHtml)}</div>
         ` : `
           <div class="generated-title-row"><h2>${escapeHtml(note.title)}</h2></div>
@@ -1539,6 +1717,7 @@
                     <button class="text-link" type="button" data-new-folder-context="ocr">＋ 新建</button>
                   </span>
                 </label>
+                <label class="source-keep-toggle"><input id="ocr-keep-sources" type="checkbox" ${state.ocrKeepSources ? 'checked' : ''} /><span>保存原始截图（关闭后只保留文字，更省空间）</span></label>
                 ${state.ocrTitleSuggestions.length ? `
                   <div class="ocr-title-suggestions">
                     <span>主题相关标题建议</span>
@@ -1643,6 +1822,7 @@
       renderMode: state.pasteRenderMode,
       filterIrrelevant: state.pasteFilterIrrelevant
     });
+    state.pasteStructuredHtml = buildStructuredTextHtml(state.pasteTemplate, state.pasteBlocks, state.pasteText);
   }
 
   function parsePasteContent() {
@@ -1664,7 +1844,7 @@
   }
 
   async function copyPasteResult() {
-    const text = ocrBlocksToPlainText(state.pasteBlocks);
+    const text = stripHtml(state.pasteStructuredHtml || '') || ocrBlocksToPlainText(state.pasteBlocks);
     if (!text) {
       toast('暂无可复制内容。', 'error');
       return;
@@ -1708,7 +1888,7 @@
       const title = titleInput.value.trim() || state.pasteTitle || 'AI 识别结果整理';
       const tags = tagsInput.value.split(/[,，]/).map((tag) => tag.trim().replace(/^#/, '')).filter(Boolean);
       const blocks = state.pasteBlocks.length ? state.pasteBlocks : buildBlocksForText(state.pasteText);
-      const contentHtml = blocksToHtml(blocks);
+      const contentHtml = sanitizeHtml(state.pasteStructuredHtml || blocksToHtml(blocks));
       const now = new Date().toISOString();
       const note = {
         id: `note-${Date.now()}`,
@@ -1724,6 +1904,7 @@
       state.notes.unshift(note);
       state.pasteText = '';
       state.pasteBlocks = [];
+      state.pasteStructuredHtml = '';
       state.pasteTitle = '';
       state.pasteTitleSuggestions = [];
       state.pasteRenderMode = 'auto';
@@ -1740,24 +1921,40 @@
     const suspiciousCount = countSuspiciousOcrCells(state.pasteBlocks);
     return `
       ${pageHeader(
-        'AI Import',
-        '粘贴 AI 识别结果',
-        '把豆包、Kimi、ChatGPT 等识别出的文字或表格粘贴进来，自动整理成便签。',
-        '<button class="btn secondary" data-route="ocr">← 返回图片 OCR</button>'
+        'AI Structuring',
+        'AI 结构化整理',
+        '粘贴任意 OCR 或 AI 识别结果，选择模板后自动提炼大纲、错题、参数表、阅读摘要或会议行动项。',
+        '<button class="btn secondary" data-route="ocr">← 图片提取文字</button>'
       )}
       <div class="paste-workspace">
         <section class="panel">
           <div class="panel-header">
-            <h2>粘贴内容</h2>
-            <span class="step">Markdown / Excel / 普通文本</span>
+            <h2>1. 选择结构化模板</h2>
+            <span class="step">AI 结构化是核心能力</span>
           </div>
           <div class="panel-body">
-            <textarea class="paste-textarea" id="paste-text" spellcheck="false" placeholder="例如：&#10;| 时间 | 内容 |&#10;| --- | --- |&#10;| 3天 | 不会掉肌肉…… |">${escapeHtml(state.pasteText)}</textarea>
+            <div class="text-template-grid">
+              ${Object.entries(textTemplates).map(([key, template]) => `
+                <button class="text-template-card ${state.pasteTemplate === key ? 'active' : ''}" type="button" data-paste-template="${key}">
+                  <span>${template.icon}</span>
+                  <strong>${template.name}</strong>
+                  <small>${template.description}</small>
+                  <em>${template.sample.map((line) => `<i>${escapeHtml(line)}</i>`).join('')}</em>
+                </button>
+              `).join('')}
+            </div>
+
+            <div class="divider"></div>
+            <div class="panel-header inline-panel-head">
+              <h2>2. 粘贴外部 OCR / AI 文字</h2>
+              <span class="step">不强制使用本网页 OCR</span>
+            </div>
+            <textarea class="paste-textarea" id="paste-text" spellcheck="false" placeholder="可以直接粘贴苹果备忘录、豆包、Kimi、ChatGPT 或其他工具的识别结果……&#10;&#10;也可以粘贴 Markdown 表格、Excel Tab 内容和普通文本。">${escapeHtml(state.pasteText)}</textarea>
             <div class="action-row">
-              <span class="helper-note">支持 Markdown 表格、Excel 复制的 Tab 内容、普通文本和列表。</span>
+              <span class="helper-note">支持课堂笔记、错题、技术文档、阅读摘录和会议纪要等模板。</span>
               <div class="paste-actions">
-                <button class="btn ghost small" id="paste-example" type="button">填入示例</button>
-                <button class="btn" id="parse-paste" type="button">解析并整理</button>
+                <button class="btn ghost small" id="paste-example" type="button">填入课堂示例</button>
+                <button class="btn" id="parse-paste" type="button">开始 AI 结构化</button>
               </div>
             </div>
           </div>
@@ -1766,7 +1963,7 @@
         ${parsed ? `
           <aside class="panel paste-preview-panel">
             <div class="panel-header">
-              <h2>便签预览</h2>
+              <h2>3. 编辑结构化结果</h2>
               <span class="result-count">${state.pasteBlocks.length} 个段落</span>
             </div>
             <div class="panel-body">
@@ -1787,7 +1984,7 @@
               </div>
 
               <div class="ocr-preview-toolbar">
-                <span>排版方式</span>
+                <span>结构化预览</span>
                 <div class="ocr-preview-actions">
                   ${suspiciousCount ? `<span class="table-warning">${suspiciousCount} 个待核对</span>` : ''}
                   <div class="ocr-layout-modes" role="group" aria-label="粘贴内容排版方式">
@@ -1803,12 +2000,12 @@
               </label>
               <div class="apple-note-sheet">
                 <div class="apple-note-date">${formatDate(new Date().toISOString(), true)}</div>
-                <h2 class="apple-note-title" id="paste-preview-title">${escapeHtml(state.pasteTitle || 'AI 识别结果整理')}</h2>
-                <div class="apple-note-body" id="paste-preview-body">${renderOcrBlockPreview(state.pasteBlocks)}</div>
+                <h2 class="apple-note-title" id="paste-preview-title">${escapeHtml(state.pasteTitle || 'AI 结构化结果')}</h2>
+                <div class="apple-note-body ocr-editable-draft" id="paste-preview-body" contenteditable="true" spellcheck="false">${sanitizeHtml(state.pasteStructuredHtml || renderOcrBlockPreview(state.pasteBlocks))}</div>
               </div>
               <div class="action-row">
                 <button class="btn secondary" id="copy-paste-result" type="button">复制整理结果</button>
-                <button class="btn" id="save-paste-note" type="button">保存为笔记</button>
+                <button class="btn" id="save-paste-note" type="button">保存结构化笔记</button>
               </div>
             </div>
           </aside>
@@ -1816,9 +2013,9 @@
           <aside class="panel">
             <div class="preview-placeholder">
               <div>
-                <span class="preview-illustration">⇧</span>
-                <h3>解析结果会显示在这里</h3>
-                <p>粘贴 AI 识别结果后点击“解析并整理”。</p>
+                <span class="preview-illustration">✦</span>
+                <h3>结构化结果会显示在这里</h3>
+                <p>粘贴文字，选择模板，然后点击“开始 AI 结构化”。</p>
               </div>
             </div>
           </aside>
@@ -1834,7 +2031,10 @@
       <section class="detail-sources">
         <div class="detail-sources-head">
           <span>原始截图</span>
-          <small>${sourceImages.length} 张 · 点击放大，长按保存</small>
+          <div class="detail-sources-actions">
+            <small>${sourceImages.length} 张 · 点击放大，长按保存</small>
+            <button class="text-link" type="button" data-remove-note-sources="${escapeHtml(note.id)}">删除原图</button>
+          </div>
         </div>
         <div class="detail-source-grid">
           ${sourceImages.map((source, index) => `
@@ -1961,8 +2161,11 @@
   function setupSectionSorting() {
     if (!state.sectionSortMode) return;
     const sections = getSortableSections();
+    const clearDropState = () => {
+      sections.forEach((item) => item.classList.remove('dragging', 'drag-over-before', 'drag-over-after'));
+    };
     sections.forEach((section) => {
-      section.draggable = true;
+      section.draggable = false;
       section.classList.add('sortable-section');
       if (!section.querySelector(':scope > .section-sort-controls')) {
         const controls = document.createElement('div');
@@ -1971,34 +2174,38 @@
         controls.innerHTML = '<span class="section-drag-handle" title="拖动排序">⠿</span><button type="button" data-move-section="up">↑</button><button type="button" data-move-section="down">↓</button>';
         section.prepend(controls);
       }
-      section.ondragstart = (event) => {
-        if (event.target.closest('button')) {
-          event.preventDefault();
-          return;
-        }
-        draggedSection = section;
-        section.classList.add('dragging');
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', section.dataset.sectionId || '');
-      };
+      const handle = section.querySelector(':scope > .section-sort-controls .section-drag-handle');
+      if (handle) {
+        handle.draggable = true;
+        handle.ondragstart = (event) => {
+          draggedSection = section;
+          section.classList.add('dragging');
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', section.dataset.sectionId || '');
+        };
+        handle.ondragend = () => {
+          draggedSection = null;
+          clearDropState();
+        };
+      }
       section.ondragover = (event) => {
         if (!draggedSection || draggedSection === section) return;
         event.preventDefault();
         const rect = section.getBoundingClientRect();
         const after = event.clientY > rect.top + rect.height / 2;
-        if (after) section.after(draggedSection);
-        else section.before(draggedSection);
+        section.classList.toggle('drag-over-after', after);
+        section.classList.toggle('drag-over-before', !after);
       };
+      section.ondragleave = () => section.classList.remove('drag-over-before', 'drag-over-after');
       section.ondrop = (event) => {
         event.preventDefault();
-        if (draggedSection) persistSectionOrder(state.noteId);
+        if (!draggedSection || draggedSection === section) return;
+        const insertAfter = section.classList.contains('drag-over-after');
+        if (insertAfter) section.after(draggedSection);
+        else section.before(draggedSection);
+        persistSectionOrder(state.noteId);
         draggedSection = null;
-        section.classList.remove('dragging');
-      };
-      section.ondragend = () => {
-        if (draggedSection) persistSectionOrder(state.noteId, { toast: false });
-        draggedSection = null;
-        sections.forEach((item) => item.classList.remove('dragging'));
+        clearDropState();
       };
     });
   }
@@ -2072,6 +2279,16 @@
     const generatedFolder = document.getElementById('ocr-generated-folder');
     if (generatedFolder) generatedFolder.addEventListener('change', (event) => {
       state.ocrFolder = event.target.value || '未分类';
+    });
+
+    const ocrKeepSources = document.getElementById('ocr-keep-sources');
+    if (ocrKeepSources) ocrKeepSources.addEventListener('change', (event) => {
+      state.ocrKeepSources = event.target.checked;
+    });
+
+    const aiKeepSources = document.getElementById('ai-keep-sources');
+    if (aiKeepSources) aiKeepSources.addEventListener('change', (event) => {
+      state.aiKeepSources = event.target.checked;
     });
 
     const ocrPreviewBody = document.getElementById('ocr-preview-body');
@@ -2154,9 +2371,22 @@
       if (blockCount) blockCount.textContent = `${state.ocrBlocks.length} 个段落`;
     });
 
+    document.querySelectorAll('[data-paste-template]').forEach((button) => {
+      button.addEventListener('click', () => {
+        state.pasteTemplate = button.dataset.pasteTemplate || 'auto';
+        if (state.pasteText.trim()) rebuildPasteBlocks();
+        render();
+      });
+    });
+
     const pasteText = document.getElementById('paste-text');
     if (pasteText) pasteText.addEventListener('input', (event) => {
       state.pasteText = event.target.value;
+    });
+
+    const pastePreviewBody = document.getElementById('paste-preview-body');
+    if (pastePreviewBody) pastePreviewBody.addEventListener('input', (event) => {
+      state.pasteStructuredHtml = event.target.innerHTML;
     });
 
     const parsePaste = document.getElementById('parse-paste');
@@ -2165,11 +2395,11 @@
     const pasteExample = document.getElementById('paste-example');
     if (pasteExample) pasteExample.addEventListener('click', () => {
       state.pasteText = [
-        '| 时间 | 内容 |',
-        '| --- | --- |',
-        '| 3天 | 不会掉肌肉，休息正是肌肉修复增长的时期。 |',
-        '| 7天 | 肌肉停止生长、体能下降，重启训练更容易心慌气短。 |',
-        '| 30天 | 力量与肌肉围度下降，重启运动格外吃力。 |'
+        '今天课程主题：函数单调性。',
+        '重点：函数单调性的定义、区间判断，以及利用导数判断单调性。',
+        '难点：含参数函数的单调区间讨论，容易忽略定义域。',
+        '例题：求函数在某区间上的单调性，先求导，再判断导数符号。',
+        '作业：完成教材第 12 页第 3、4 题，整理错题并写一句方法总结。'
       ].join('\n');
       state.pasteParsed = false;
       render();
@@ -2236,7 +2466,7 @@
     context.fillStyle = '#111111';
     context.textBaseline = 'top';
     context.font = '700 76px "PingFang SC", "Microsoft YaHei", sans-serif';
-    context.fillText('任意笔记 Best Note', 80, 70);
+    context.fillText('优记 BestNote', 80, 70);
     context.font = '58px "PingFang SC", "Microsoft YaHei", sans-serif';
     context.fillText('OCR 真实识别测试图片', 80, 230);
     context.fillText('股票代码 600519', 80, 380);
@@ -2632,6 +2862,83 @@
     ].join('');
   }
 
+  function resolveTextTemplate(template, text = '') {
+    if (template && template !== 'auto') return template;
+    const topic = analyzeOcrTopics(String(text || '').split('\n').map((line) => line.trim()).filter(Boolean))[0]?.id;
+    const map = {
+      meeting: 'meeting',
+      project: 'tech_doc',
+      product: 'tech_doc',
+      data: 'tech_doc',
+      document: 'tech_doc',
+      stock: 'tech_doc',
+      learning: 'classroom',
+      reading: 'reading'
+    };
+    return map[topic] || 'classroom';
+  }
+
+  function buildStructuredTextHtml(template, blocks, text = '') {
+    const resolved = resolveTextTemplate(template, text);
+    const allBlocks = blocks?.length ? blocks : structureOcrContent(text, { disableAutoTable: true });
+    if (resolved === 'raw') return blocksToHtml(allBlocks);
+
+    if (resolved === 'classroom') {
+      const reviewBlocks = pickOcrBlocks(allBlocks, /(复习|练习|作业|背诵|记忆|重点|考试|待办|计划|下一步)/);
+      const primaryBlocks = removeOcrBlocks(allBlocks, reviewBlocks);
+      return [
+        `<h3>核心要点</h3>${blocksToHtml(primaryBlocks.length ? primaryBlocks : allBlocks)}`,
+        reviewBlocks.length ? `<h3>重点与复习清单</h3>${blocksToHtml(reviewBlocks)}` : ''
+      ].join('');
+    }
+
+    if (resolved === 'wrong_question') {
+      const answerBlocks = pickOcrBlocks(allBlocks, /(答案|解析|正确|结果)/);
+      const reasonBlocks = pickOcrBlocks(allBlocks, /(错误|原因|易错|失误|考点|知识点)/);
+      const primaryBlocks = removeOcrBlocks(allBlocks, [...answerBlocks, ...reasonBlocks]);
+      return [
+        `<h3>题干与题目内容</h3>${blocksToHtml(primaryBlocks.length ? primaryBlocks : allBlocks)}`,
+        answerBlocks.length ? `<h3>答案与解析</h3>${blocksToHtml(answerBlocks)}` : '',
+        reasonBlocks.length ? `<h3>错误原因与考点</h3>${blocksToHtml(reasonBlocks)}` : ''
+      ].join('');
+    }
+
+    if (resolved === 'tech_doc') {
+      const kvBlocks = allBlocks.filter((block) => block.type === 'keyValue');
+      const otherBlocks = allBlocks.filter((block) => block.type !== 'keyValue');
+      const table = kvBlocks.length
+        ? `<h3>参数与配置</h3><div class="apple-table-wrap"><table><thead><tr><th>参数</th><th>值</th></tr></thead><tbody>${kvBlocks.map((block) => `<tr><td>${escapeHtml(block.key)}</td><td>${escapeHtml(block.value)}</td></tr>`).join('')}</tbody></table></div>`
+        : '';
+      return [
+        table,
+        otherBlocks.length ? `<h3>说明与注意事项</h3>${blocksToHtml(otherBlocks)}` : ''
+      ].join('');
+    }
+
+    if (resolved === 'reading') {
+      const firstParagraph = allBlocks.find((block) => block.type === 'paragraph')?.text || '';
+      const quoteBlocks = allBlocks.filter((block) => block !== allBlocks.find((item) => item.type === 'paragraph' && item.text === firstParagraph));
+      return [
+        firstParagraph ? `<h3>内容摘要</h3><p>${escapeHtml(firstParagraph)}</p>` : '',
+        `<h3>摘录与重点</h3>${blocksToHtml(quoteBlocks.length ? quoteBlocks : allBlocks)}`,
+        '<h3>关键词与行动</h3><p>建议：提炼 3–5 个关键词，并写下一步行动。</p>'
+      ].join('');
+    }
+
+    if (resolved === 'meeting') {
+      const actionBlocks = pickOcrBlocks(allBlocks, /(行动|待办|负责人|截止|下一步|安排|跟进|完成时间)/);
+      const riskBlocks = pickOcrBlocks(allBlocks, /(风险|问题|阻塞|依赖|待确认)/);
+      const conclusionBlocks = removeOcrBlocks(allBlocks, [...actionBlocks, ...riskBlocks]);
+      return [
+        `<h3>会议结论</h3>${blocksToHtml(conclusionBlocks.length ? conclusionBlocks : allBlocks)}`,
+        `<h3>行动项</h3>${actionBlocks.length ? blocksToHtml(actionBlocks) : '<p>未识别到明确行动项，请手动补充负责人和截止时间。</p>'}`,
+        riskBlocks.length ? `<h3>风险与待确认</h3>${blocksToHtml(riskBlocks)}` : ''
+      ].join('');
+    }
+
+    return blocksToHtml(allBlocks);
+  }
+
   function buildGeneratedNote(template, files, text, markdown = '', providedBlocks = null, titleText = '') {
     const normalized = normalizeOcrText(correctOcrDomainText(text));
     const markdownBlocks = markdown ? parseMarkdownToOcrBlocks(markdown) : [];
@@ -2711,7 +3018,7 @@
     state.aiResult = null;
     state.importTemplate = 'auto';
     navigate('note', { noteId: note.id });
-    attachSourceImagesInBackground(note, sourceFiles);
+    if (state.aiKeepSources && document.getElementById('ai-keep-sources')?.checked !== false) attachSourceImagesInBackground(note, sourceFiles);
     toast('编辑结果已保存为笔记。', 'success');
   }
 
@@ -4795,7 +5102,7 @@
     if (secondHits > 0) score += Math.min(secondHits, 4) * 3;
     if (/(?:清单|纪要|报告|分析|观察|方案|计划|要点|总结|复盘|策略|研究)/.test(title)) score += 16;
     if (/^(?:核心结论|结论|摘要|总结|要点|说明|备注|目标|背景)[：:]?/.test(title)) score -= 30;
-    if (/^(?:任意笔记|best\s*note)/i.test(title)) score -= 80;
+    if (/^(?:优记|best\s*note)/i.test(title)) score -= 80;
     if (/(?:测试图片|示例图片|演示模式|demo|smoke)/i.test(title)) score -= 20;
     if (/[。！？!?]$/.test(title) && /[，,]/.test(title) && length > 16) score -= 30;
     if (/[，,]/.test(title) && length > 14) score -= 10;
@@ -5495,7 +5802,7 @@
     clearFiles('ocr');
     persist({ reason: '保存 OCR 笔记' });
     navigate('note', { noteId: note.id });
-    attachSourceImagesInBackground(note, sourceFiles);
+    if (state.ocrKeepSources && document.getElementById('ocr-keep-sources')?.checked !== false) attachSourceImagesInBackground(note, sourceFiles);
     toast('编辑结果已保存为笔记。', 'success');
   }
 
@@ -5993,23 +6300,46 @@
     toast(`已导入 ${selected.length} 条真实示例。`, 'success');
   }
 
-  function exportBackup() {
+  async function exportBackup() {
+    const assets = await getAllAssetRecords();
     const payload = {
-      app: '任意笔记 Best Note',
-      version: '7.12',
+      app: '优记 BestNote',
+      version: '7.15',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
-      customFolders: state.customFolders
+      customFolders: state.customFolders,
+      assets: assets.map((record) => ({
+        id: record.id,
+        createdAt: record.createdAt,
+        images: (record.images || []).map((image) => ({
+          id: image.id,
+          name: image.name,
+          type: image.type,
+          data: arrayBufferToBase64(image.data)
+        }))
+      }))
     };
-    downloadBlob(`Best-Note-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
-    toast('备份文件已导出。', 'success');
+    downloadBlob(`Best-Note-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(payload), 'application/json;charset=utf-8');
+    toast(`完整备份已导出，包含 ${state.notes.length} 条笔记和 ${assets.length} 组原图。`, 'success');
+  }
+
+  function exportAllMarkdown() {
+    if (!state.notes.length) {
+      toast('当前没有可导出的笔记。', 'error');
+      return;
+    }
+    const content = state.notes
+      .map((note) => `${htmlToMarkdown(note)}\n\n---\n\n`)
+      .join('');
+    downloadBlob(`Best-Note-全部笔记-${new Date().toISOString().slice(0, 10)}.md`, content, 'text/markdown;charset=utf-8');
+    toast(`已导出 ${state.notes.length} 条 Markdown 笔记。`, 'success');
   }
 
   function importBackup(file) {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const payload = JSON.parse(String(reader.result || '{}'));
         const incoming = Array.isArray(payload.notes) ? payload.notes : [];
@@ -6037,9 +6367,28 @@
           if (!note?.id || state.deletedNotes.some((item) => item.id === note.id)) return;
           state.deletedNotes.push(note);
         });
-        persist();
+        const incomingAssets = Array.isArray(payload.assets) ? payload.assets : [];
+        if (incomingAssets.length) {
+          const database = await openAssetDatabase();
+          const transaction = database.transaction(DB_ASSETS_STORE, 'readwrite');
+          const store = transaction.objectStore(DB_ASSETS_STORE);
+          incomingAssets.forEach((record) => {
+            if (!record?.id || !Array.isArray(record.images)) return;
+            store.put({
+              id: record.id,
+              createdAt: record.createdAt || new Date().toISOString(),
+              images: record.images.map((image) => ({
+                id: image.id,
+                name: image.name,
+                type: image.type,
+                data: base64ToArrayBuffer(image.data || '')
+              }))
+            });
+          });
+        }
+        persist({ history: false });
         render();
-        toast(`备份导入完成：${incoming.length} 条笔记已合并。`, 'success');
+        toast(`备份导入完成：${incoming.length} 条笔记，${incomingAssets.length} 组原图。`, 'success');
       } catch (error) {
         toast(error.message || '备份文件格式不正确。', 'error');
       }
@@ -6277,6 +6626,29 @@
     });
   }
 
+  function openRemoveSourcesModal(noteId) {
+    const note = getNoteById(noteId);
+    if (!note?.sourceImages?.length) return;
+    showModal(`
+      <div class="modal">
+        <h2>删除原始截图？</h2>
+        <p>将删除这条笔记保留的 ${note.sourceImages.length} 张原图和缩略图，文字内容不会受影响。</p>
+        <div class="modal-actions">
+          <button class="btn ghost" data-close-modal>取消</button>
+          <button class="btn danger" id="confirm-remove-sources">删除原图</button>
+        </div>
+      </div>
+    `);
+    document.getElementById('confirm-remove-sources')?.addEventListener('click', async () => {
+      await deleteSourceImageAssets(noteId);
+      note.sourceImages = [];
+      persist({ reason: '删除笔记原图' });
+      closeModal();
+      render();
+      toast('原始截图已删除，文字内容已保留。', 'success');
+    });
+  }
+
   async function openSourceLightbox(noteId, index = 0) {
     const note = getNoteById(noteId);
     const source = note?.sourceImages?.[index];
@@ -6310,6 +6682,11 @@
         </div>
         <div class="source-lightbox-image-wrap">
           <img src="${imageUrl}" alt="${escapeHtml(source?.name || '原始截图')}" draggable="true" />
+        </div>
+        <div class="source-lightbox-nav">
+          <button class="btn secondary small" type="button" data-source-nav="${escapeHtml(noteId)}" data-source-nav-index="${index - 1}" ${index <= 0 ? 'disabled' : ''}>← 上一张</button>
+          <span>${index + 1} / ${note?.sourceImages?.length || 1}</span>
+          <button class="btn secondary small" type="button" data-source-nav="${escapeHtml(noteId)}" data-source-nav-index="${index + 1}" ${index >= (note?.sourceImages?.length || 1) - 1 ? 'disabled' : ''}>下一张 →</button>
         </div>
         <p class="source-lightbox-hint">手机端可以长按图片保存，或使用下方按钮保存原图。</p>
         <div class="modal-actions">
@@ -6360,6 +6737,14 @@
             <span class="export-icon">J</span>
             <span><strong>JSON</strong><small>保留标题、标签和结构化内容，便于再次导入</small></span>
           </button>
+          <button class="export-option" data-export-format="pdf" data-export-id="${escapeHtml(note.id)}">
+            <span class="export-icon">P</span>
+            <span><strong>PDF</strong><small>打开浏览器打印窗口，选择“另存为 PDF”</small></span>
+          </button>
+          <button class="export-option" data-export-format="png" data-export-id="${escapeHtml(note.id)}">
+            <span class="export-icon">▣</span>
+            <span><strong>PNG 图片</strong><small>把当前笔记导出为高清图片</small></span>
+          </button>
         </div>
         <div class="modal-actions">
           <button class="btn ghost" data-close-modal>取消</button>
@@ -6378,11 +6763,75 @@
       downloadBlob(`${safeName}.txt`, `${note.title}\n\n${stripHtml(note.contentHtml)}`, 'text/plain;charset=utf-8');
     } else if (format === 'json') {
       downloadBlob(`${safeName}.json`, JSON.stringify(note, null, 2), 'application/json;charset=utf-8');
+    } else if (format === 'pdf') {
+      exportNotePdf(note);
+      closeModal();
+      toast('已打开打印窗口，请选择“另存为 PDF”。', 'success');
+      return;
+    } else if (format === 'png') {
+      closeModal();
+      exportNotePng(note);
+      return;
     } else {
       downloadBlob(`${safeName}.xls`, htmlToExcel(note), 'application/vnd.ms-excel;charset=utf-8');
     }
     closeModal();
-    toast(`已导出 ${format === 'markdown' ? 'Markdown' : format === 'excel' ? 'Excel' : '纯文本'} 文件。`, 'success');
+    const formatLabel = { markdown: 'Markdown', excel: 'Excel', text: '纯文本', json: 'JSON' }[format] || '文件';
+    toast(`已导出 ${formatLabel} 文件。`, 'success');
+  }
+
+  function exportNotePdf(note) {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast('浏览器阻止了打印窗口，请允许弹出窗口后重试。', 'error');
+      return;
+    }
+    const tags = (note.tags || []).map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(' ');
+    printWindow.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>${escapeHtml(note.title)}</title><style>
+      body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#111827;line-height:1.75;margin:42px;max-width:820px}
+      h1{font-size:30px;margin:0 0 8px}h3{font-size:17px;margin-top:24px}table{width:100%;border-collapse:collapse;margin:14px 0}th,td{border:1px solid #d1d5db;padding:8px 10px;text-align:left;vertical-align:top}th{background:#f3f4f6}
+      .meta{color:#6b7280;font-size:12px;margin-bottom:22px}.tags span{display:inline-block;margin-right:7px;color:#2563eb}@media print{body{margin:12mm}}
+    </style></head><body><h1>${escapeHtml(note.title)}</h1><div class="meta">${formatDateTime(note.updatedAt)} · 文件夹：${escapeHtml(note.folder || '未分类')}</div><div class="tags">${tags}</div><hr>${sanitizeHtml(note.contentHtml)}<script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
+    printWindow.document.close();
+  }
+
+  let html2canvasLoader = null;
+  function loadHtml2Canvas() {
+    if (window.html2canvas) return Promise.resolve(window.html2canvas);
+    if (html2canvasLoader) return html2canvasLoader;
+    html2canvasLoader = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+      script.async = true;
+      script.onload = () => window.html2canvas ? resolve(window.html2canvas) : reject(new Error('PNG 导出组件初始化失败。'));
+      script.onerror = () => reject(new Error('PNG 导出组件下载失败，请检查网络。'));
+      document.head.appendChild(script);
+    });
+    return html2canvasLoader;
+  }
+
+  async function exportNotePng(note) {
+    try {
+      const html2canvas = await loadHtml2Canvas();
+      if (state.route !== 'note' || state.noteId !== note.id) navigate('note', { noteId: note.id });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const target = document.querySelector('.detail-paper');
+      if (!target) throw new Error('没有找到可导出的笔记内容。');
+      const canvas = await html2canvas(target, {
+        scale: 2,
+        backgroundColor: activeTheme === 'dark' ? '#0f172a' : '#fffef9',
+        useCORS: true,
+        logging: false
+      });
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
+      if (!blob) throw new Error('PNG 生成失败。');
+      const safeName = note.title.replace(/[\/:*?"<>|]/g, '-').slice(0, 60) || '笔记';
+      downloadBlob(`${safeName}.png`, blob, 'image/png');
+      toast('PNG 已开始下载。', 'success');
+    } catch (error) {
+      console.error('PNG export failed:', error);
+      toast(error.message || 'PNG 导出失败。', 'error');
+    }
   }
 
   function htmlToMarkdown(note) {
@@ -6473,11 +6922,11 @@
     showModal(`
       <div class="modal">
         <h2>安装到手机或桌面</h2>
-        <p>在 Chrome、Edge 或 Safari 中打开本网页后，可以通过浏览器的“添加到主屏幕 / 安装应用”把任意笔记保存成独立入口。</p>
+        <p>在 Chrome、Edge 或 Safari 中打开本网页后，可以通过浏览器的“添加到主屏幕 / 安装应用”把优记保存成独立入口。</p>
         <ul class="install-steps">
           <li><strong>iPhone / iPad：</strong>点击 Safari 底部分享按钮，选择“添加到主屏幕”。</li>
           <li><strong>Android：</strong>点击浏览器菜单，选择“安装应用”或“添加到主屏幕”。</li>
-          <li><strong>电脑：</strong>点击地址栏右侧的安装图标，或浏览器菜单中的“安装任意笔记”。</li>
+          <li><strong>电脑：</strong>点击地址栏右侧的安装图标，或浏览器菜单中的“安装优记”。</li>
         </ul>
         <div class="modal-actions">
           <button class="btn" data-close-modal>知道了</button>
@@ -6524,6 +6973,11 @@
   }
 
   document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-theme-toggle]')) {
+      toggleTheme();
+      return;
+    }
+
     if (event.target.closest('[data-install-app]')) {
       installApp();
       return;
@@ -6537,6 +6991,28 @@
     const newFolderContext = event.target.closest('[data-new-folder-context]');
     if (newFolderContext) {
       openNewFolderModal(newFolderContext.dataset.newFolderContext || 'global');
+      return;
+    }
+
+    const homeTemplate = event.target.closest('[data-home-template]');
+    if (homeTemplate) {
+      state.pasteTemplate = homeTemplate.dataset.homeTemplate || 'auto';
+      state.pasteParsed = false;
+      state.pasteStructuredHtml = '';
+      navigate('paste');
+      setTimeout(() => document.getElementById('paste-text')?.focus(), 0);
+      return;
+    }
+
+    const removeSources = event.target.closest('[data-remove-note-sources]');
+    if (removeSources) {
+      openRemoveSourcesModal(removeSources.dataset.removeNoteSources);
+      return;
+    }
+
+    const sourceNav = event.target.closest('[data-source-nav]');
+    if (sourceNav) {
+      openSourceLightbox(sourceNav.dataset.sourceNav, Number(sourceNav.dataset.sourceNavIndex || 0));
       return;
     }
 
@@ -6757,6 +7233,11 @@
       return;
     }
 
+    if (event.target.closest('[data-export-all-markdown]')) {
+      exportAllMarkdown();
+      return;
+    }
+
     const exportButton = event.target.closest('[data-export]');
     if (exportButton) {
       openExportModal(exportButton.dataset.export);
@@ -6790,10 +7271,32 @@
   });
 
   document.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    const modifier = event.metaKey || event.ctrlKey;
+    if (modifier && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       globalSearch.focus();
       globalSearch.select();
+      return;
+    }
+    if (modifier && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      state.pasteTemplate = 'auto';
+      navigate('paste');
+      setTimeout(() => document.getElementById('paste-text')?.focus(), 0);
+      return;
+    }
+    if (modifier && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      globalSearch.focus();
+      globalSearch.select();
+      return;
+    }
+    if (modifier && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      if (state.route === 'note' && state.noteId) saveNoteDetail(state.noteId);
+      else if (state.route === 'paste' && state.pasteParsed) openSavePasteModal();
+      else toast('当前页面没有需要保存的内容。', 'error');
+      return;
     }
     if (event.key === 'Escape') closeModal();
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-open-note]')) {
@@ -6824,17 +7327,17 @@
 
   window.addEventListener('appinstalled', () => {
     deferredInstallPrompt = null;
-    toast('任意笔记已安装到当前设备。', 'success');
+    toast('优记已安装到当前设备。', 'success');
   });
 
   const requestedRoute = new URLSearchParams(window.location.search).get('route');
-  if (['home', 'import', 'ocr', 'paste', 'notes', 'examples', 'history'].includes(requestedRoute)) {
+  if (['home', 'import', 'ocr', 'paste', 'notes', 'examples', 'history', 'backup'].includes(requestedRoute)) {
     state.route = requestedRoute;
   }
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.12',
+      version: '7.15',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -6845,6 +7348,8 @@
       matrixToHtml: (matrix) => tableMatrixToHtml(matrix, true),
       matrixFromHtml: (html) => getTableMatrix(html),
       mergeSectionsHtml: (notes) => buildMergedSectionsHtml(notes),
+      structureText: (template, text) => buildStructuredTextHtml(template, buildBlocksForText(text), text),
+      resolveTextTemplate: (template, text) => resolveTextTemplate(template, text),
       supportsIndexedDb: Boolean(window.indexedDB),
       correctTime: (value) => correctOcrTimeCell(value),
       normalizeTimes: (values) => normalizeOcrTimeSequence(values),
@@ -6859,6 +7364,8 @@
     });
   }
 
+  applyTheme();
+  setSaveStatus('已自动保存', 'saved');
   bindMobileImportInputs();
   hydrateFromDatabase().then(consumeSharedPayload).finally(() => render());
 })();

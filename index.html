@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f766e" />
-  <meta name="description" content="任意笔记 Best Note - 把截图、表格和 AI 结果整理成可编辑的结构化笔记。" />
-  <title>任意笔记 Best Note · 截图与表格整理器</title>
-  <link rel="stylesheet" href="./styles.css?v=7.12" />
+  <meta name="theme-color" content="#0b4d9b" />
+  <meta name="description" content="优记 BestNote - 免注册、本地存储的网页 AI 笔记，把图片、OCR 和粘贴文字整理成结构化笔记。" />
+  <title>优记 BestNote · 网页 AI 笔记</title>
+  <link rel="stylesheet" href="./styles.css?v=7.15" />
   <link rel="manifest" href="./manifest.json" />
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
-      <a class="brand" href="#" data-route="home" aria-label="任意笔记首页">
-        <span class="brand-mark">任</span>
+      <a class="brand" href="#" data-route="home" aria-label="优记首页">
+        <span class="brand-mark">优</span>
         <span>
-          <strong>任意笔记</strong>
-          <small>Best Note</small>
+          <strong>优记</strong>
+          <small>BestNote</small>
         </span>
       </a>
 
@@ -24,14 +24,14 @@
         <button class="nav-item" data-route="home">
           <span class="nav-icon">⌂</span><span>首页</span>
         </button>
+        <button class="nav-item" data-route="paste">
+          <span class="nav-icon">✦</span><span>AI 结构化</span>
+        </button>
         <button class="nav-item" data-route="import">
-          <span class="nav-icon">✦</span><span>AI 整理</span>
+          <span class="nav-icon">◫</span><span>图片整理</span>
         </button>
         <button class="nav-item" data-route="ocr">
           <span class="nav-icon">⌘</span><span>OCR 提取</span>
-        </button>
-        <button class="nav-item" data-route="paste">
-          <span class="nav-icon">⇧</span><span>粘贴整理</span>
         </button>
         <button class="nav-item" data-route="notes">
           <span class="nav-icon">▤</span><span>全部笔记</span>
@@ -41,6 +41,9 @@
         </button>
         <button class="nav-item" data-route="history">
           <span class="nav-icon">↺</span><span>版本历史</span>
+        </button>
+        <button class="nav-item" data-route="backup">
+          <span class="nav-icon">⛨</span><span>数据备份</span>
         </button>
       </nav>
 
@@ -53,27 +56,29 @@
           </div>
         </div>
         <button class="install-button" type="button" data-install-app>⤓ 安装到手机 / 桌面</button>
-        <p class="version">Web Prototype · v7.12</p>
+        <p class="version">Web Prototype · v7.15</p>
       </div>
     </aside>
 
     <main class="main-content">
       <header class="topbar">
         <button class="mobile-brand" data-route="home" aria-label="返回首页">
-          <span class="brand-mark small">任</span>
-          <strong>任意笔记</strong>
+          <span class="brand-mark small">优</span>
+          <strong>优记</strong>
         </button>
         <label class="global-search" for="global-search-input">
           <span>⌕</span>
           <input id="global-search-input" type="search" placeholder="搜索笔记、标签或内容…" autocomplete="off" />
           <kbd>⌘ K</kbd>
         </label>
-        <button class="install-top-button" type="button" data-install-app aria-label="安装任意笔记" title="安装到手机或桌面">⤓</button>
+        <span id="save-status" class="save-status">已自动保存</span>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="切换深浅主题" title="切换深浅主题">◐</button>
+        <button class="install-top-button" type="button" data-install-app aria-label="安装优记" title="安装到手机或桌面">⤓</button>
         <button class="trash-button" type="button" data-route="trash" aria-label="打开回收站">
           <span>♲</span>
           <small id="trash-count" class="trash-count hidden">0</small>
         </button>
-        <button class="avatar" type="button" title="本地用户">任</button>
+        <button class="avatar" type="button" title="本地用户">优</button>
       </header>
 
       <div id="view-root" class="view-root" aria-live="polite"></div>
@@ -81,7 +86,7 @@
 
     <nav class="bottom-nav" aria-label="移动端导航">
       <button data-route="home"><span>⌂</span><small>首页</small></button>
-      <button class="primary-nav" data-route="ocr"><span>＋</span><small>OCR</small></button>
+      <button class="primary-nav" data-route="paste"><span>✦</span><small>AI 结构化</small></button>
       <button data-route="notes"><span>▤</span><small>笔记</small></button>
     </nav>
   </div>
@@ -91,6 +96,6 @@
   <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
   <div id="modal-root"></div>
 
-  <script src="./app.js?v=7.12"></script>
+  <script src="./app.js?v=7.15"></script>
 </body>
 </html>

@@ -1,13 +1,13 @@
 {
-  "name": "任意笔记 Best Note",
-  "short_name": "任意笔记",
-  "description": "把截图识别结果整理成可编辑、可搜索、可导出的本地笔记。",
+  "name": "优记 BestNote",
+  "short_name": "优记",
+  "description": "优记 BestNote：免注册、本地存储的网页 AI 笔记，把图片、OCR 和粘贴文字整理成结构化笔记。",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f6f7f4",
-  "theme_color": "#0f766e",
+  "background_color": "#f7f7f5",
+  "theme_color": "#0b4d9b",
   "icons": [
     {
       "src": "./icon-192.png",
@@ -20,6 +20,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ],
   "shortcuts": [

@@ -140,6 +140,18 @@
       }
     },
     {
+      name: 'AI 结构化模板可生成分层内容',
+      run(api) {
+        const classroom = api.structureText('classroom', '课程重点：函数单调性。复习：完成第 3 题。');
+        const wrong = api.structureText('wrong_question', '题目：求函数单调性。答案：先求导。错误原因：忽略定义域。考点：导数。');
+        const meeting = api.structureText('meeting', '会议结论：确认方案。行动项：小王周二前完成页面。');
+        assert(classroom.includes('核心要点'), '课堂模板缺少核心要点');
+        assert(wrong.includes('题干与题目内容'), '错题模板缺少题干');
+        assert(wrong.includes('错误原因与考点'), '错题模板缺少错误原因');
+        assert(meeting.includes('行动项'), '会议模板缺少行动项');
+      }
+    },
+    {
       name: '合并章节保持指定顺序',
       run(api) {
         const html = api.mergeSectionsHtml([
@@ -151,9 +163,9 @@
       }
     },
     {
-      name: '应用版本为 v7.12',
+      name: '应用版本为 v7.15',
       run(api) {
-        assert(api.version === '7.12', `版本为 ${api.version}`);
+        assert(api.version === '7.15', `版本为 ${api.version}`);
       }
     }
   ];
