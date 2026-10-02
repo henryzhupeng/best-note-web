@@ -4287,3 +4287,206 @@ body {
   color: var(--primary-dark);
   font-size: 20px;
 }
+/* Merge ordering and post-merge section sorting */
+.merge-note-modal {
+  width: min(680px, 100%);
+  max-height: min(90vh, 900px);
+  overflow-y: auto;
+}
+
+.merge-order-card {
+  margin: 8px 0 20px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fafcf9;
+}
+
+.merge-order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.merge-order-head small {
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.merge-order-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.merge-order-item {
+  display: grid;
+  grid-template-columns: 22px 22px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+  cursor: grab;
+}
+
+.merge-order-item.dragging {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  opacity: 0.72;
+}
+
+.merge-drag-handle {
+  color: var(--ink-faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: grab;
+}
+
+.merge-order-number {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.merge-order-title {
+  min-width: 0;
+}
+
+.merge-order-title strong,
+.merge-order-title small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-order-title strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.merge-order-title small {
+  margin-top: 2px;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.merge-order-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.merge-order-actions button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.merge-order-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.section-sort-hint {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 11px;
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.detail-content.section-sort-mode > [data-section-id] {
+  position: relative;
+  margin: 0 0 14px;
+  padding: 12px 12px 8px 42px;
+  border: 1px dashed rgba(15, 118, 110, 0.35);
+  border-radius: 12px;
+  background: #fffffd;
+  transition: border-color 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+.detail-content.section-sort-mode > [data-section-id].dragging {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  opacity: 0.65;
+}
+
+.section-sort-controls {
+  position: absolute;
+  top: 10px;
+  left: 8px;
+  display: grid;
+  gap: 3px;
+  width: 26px;
+  user-select: none;
+}
+
+.section-sort-controls button {
+  display: grid;
+  width: 26px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.section-drag-handle {
+  display: grid;
+  width: 26px;
+  height: 22px;
+  place-items: center;
+  color: var(--ink-faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: grab;
+}
+
+@media (max-width: 760px) {
+  .merge-order-item {
+    grid-template-columns: 20px 20px minmax(0, 1fr);
+  }
+
+  .merge-order-actions {
+    grid-column: 3;
+    justify-content: flex-end;
+  }
+
+  .detail-content.section-sort-mode > [data-section-id] {
+    padding-left: 36px;
+  }
+
+  .section-sort-controls {
+    left: 6px;
+  }
+}

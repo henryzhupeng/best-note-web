@@ -140,9 +140,20 @@
       }
     },
     {
-      name: '应用版本为 v7.10',
+      name: '合并章节保持指定顺序',
       run(api) {
-        assert(api.version === '7.10', `版本为 ${api.version}`);
+        const html = api.mergeSectionsHtml([
+          { id: 'first', title: '第一章', contentHtml: '<p>第一段</p>' },
+          { id: 'second', title: '第二章', contentHtml: '<p>第二段</p>' }
+        ]);
+        assert(html.includes('data-section-id="first"'), '缺少第一章节标识');
+        assert(html.indexOf('第一章') < html.indexOf('第二章'), '章节顺序不正确');
+      }
+    },
+    {
+      name: '应用版本为 v7.12',
+      run(api) {
+        assert(api.version === '7.12', `版本为 ${api.version}`);
       }
     }
   ];

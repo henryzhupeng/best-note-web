@@ -361,6 +361,7 @@
     folderFilter: '全部文件夹',
     noteSelectionMode: false,
     selectedNoteIds: [],
+    sectionSortMode: false,
     importFiles: [],
     ocrFiles: [],
     importTemplate: 'auto',
@@ -404,6 +405,7 @@
   let historySnapshotTimer = null;
   const sourceAssetMemory = new Map();
   let activeSourceObjectUrl = null;
+  let draggedSection = null;
   const root = document.getElementById('view-root');
   const toastRegion = document.getElementById('toast-region');
   const modalRoot = document.getElementById('modal-root');
@@ -818,7 +820,7 @@
         return;
       }
       [...element.attributes].forEach((attribute) => {
-        if (!['colspan', 'rowspan'].includes(attribute.name)) element.removeAttribute(attribute.name);
+        if (!['colspan', 'rowspan', 'data-section-id'].includes(attribute.name)) element.removeAttribute(attribute.name);
       });
     });
     return wrapper.innerHTML.trim();
@@ -1852,12 +1854,15 @@
       return emptyState('笔记不存在', '它可能已经被删除。', 'notes', '返回笔记列表');
     }
     const hasTable = /<table[\s>]/i.test(note.contentHtml || '');
+    const sectionCount = (note.contentHtml.match(/data-section-id=/g) || []).length;
+    const hasSortableSections = sectionCount >= 2;
     return `
       <div class="note-detail">
         <div class="detail-toolbar">
           <button class="btn ghost small" data-route="notes">← 返回笔记</button>
           <div class="detail-actions">
             <button class="btn secondary small" data-toggle-pin-note="${escapeHtml(note.id)}">${note.pinned ? '取消置顶' : '置顶笔记'}</button>
+            ${hasSortableSections ? `<button class="btn secondary small" data-toggle-section-sort="${escapeHtml(note.id)}">${state.sectionSortMode ? '退出章节排序' : '排序章节'}</button>` : ''}
             ${hasTable ? `<button class="btn secondary small" data-edit-table="${escapeHtml(note.id)}">编辑表格</button>` : ''}
             <button class="btn secondary small" data-insert-table="${escapeHtml(note.id)}">插入表格</button>
             <button class="btn secondary small" data-export="${escapeHtml(note.id)}">导出</button>
@@ -1884,9 +1889,10 @@
             </label>
           </div>
           ${renderNoteSources(note)}
-          <div class="detail-content" id="detail-content" contenteditable="true">${sanitizeHtml(note.contentHtml)}</div>
+          ${state.sectionSortMode && hasSortableSections ? '<div class="section-sort-hint">拖动章节左侧手柄，或使用 ↑ ↓ 按钮调整顺序；松开后会自动保存。</div>' : ''}
+          <div class="detail-content ${state.sectionSortMode ? 'section-sort-mode' : ''}" id="detail-content" contenteditable="${state.sectionSortMode ? 'false' : 'true'}">${sanitizeHtml(note.contentHtml)}</div>
           <footer class="detail-footer">
-            <span>单元格可直接编辑；表格工具支持增删行列、合并单元格和撤销重做。保存后与预览一致。</span>
+            <span>${state.sectionSortMode ? '章节排序会在松开或点击上下按钮后自动保存。' : '单元格可直接编辑；表格工具支持增删行列、合并单元格和撤销重做。保存后与预览一致。'}</span>
             <span>${stripHtml(note.contentHtml).length} 字符</span>
           </footer>
         </article>
@@ -1915,8 +1921,86 @@
       state.noteSelectionMode = false;
       state.selectedNoteIds = [];
     }
+    if (route !== 'note') state.sectionSortMode = false;
     if (route !== 'import' && state.aiResult) state.aiResult = state.aiResult;
     render();
+  }
+
+  function getSortableSections() {
+    const content = document.getElementById('detail-content');
+    return content ? [...content.querySelectorAll(':scope > [data-section-id]')] : [];
+  }
+
+  function persistSectionOrder(noteId, options = {}) {
+    const note = getNoteById(noteId);
+    const content = document.getElementById('detail-content');
+    if (!note || !content) return;
+    const clone = content.cloneNode(true);
+    clone.querySelectorAll('.section-sort-controls').forEach((control) => control.remove());
+    note.contentHtml = sanitizeHtml(clone.innerHTML);
+    note.summary = stripHtml(note.contentHtml).slice(0, 110);
+    note.updatedAt = new Date().toISOString();
+    persist({ reason: '调整章节顺序' });
+    if (options.toast !== false) toast('章节顺序已保存。', 'success');
+  }
+
+  function moveSectionByButton(button) {
+    const section = button.closest('[data-section-id]');
+    const content = document.getElementById('detail-content');
+    if (!section || !content) return;
+    const direction = button.dataset.moveSection;
+    if (direction === 'up' && section.previousElementSibling?.matches('[data-section-id]')) {
+      content.insertBefore(section, section.previousElementSibling);
+    }
+    if (direction === 'down' && section.nextElementSibling?.matches('[data-section-id]')) {
+      content.insertBefore(section.nextElementSibling, section);
+    }
+    persistSectionOrder(button.dataset.moveNote || section.dataset.noteId || state.noteId);
+  }
+
+  function setupSectionSorting() {
+    if (!state.sectionSortMode) return;
+    const sections = getSortableSections();
+    sections.forEach((section) => {
+      section.draggable = true;
+      section.classList.add('sortable-section');
+      if (!section.querySelector(':scope > .section-sort-controls')) {
+        const controls = document.createElement('div');
+        controls.className = 'section-sort-controls';
+        controls.contentEditable = 'false';
+        controls.innerHTML = '<span class="section-drag-handle" title="拖动排序">⠿</span><button type="button" data-move-section="up">↑</button><button type="button" data-move-section="down">↓</button>';
+        section.prepend(controls);
+      }
+      section.ondragstart = (event) => {
+        if (event.target.closest('button')) {
+          event.preventDefault();
+          return;
+        }
+        draggedSection = section;
+        section.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', section.dataset.sectionId || '');
+      };
+      section.ondragover = (event) => {
+        if (!draggedSection || draggedSection === section) return;
+        event.preventDefault();
+        const rect = section.getBoundingClientRect();
+        const after = event.clientY > rect.top + rect.height / 2;
+        if (after) section.after(draggedSection);
+        else section.before(draggedSection);
+      };
+      section.ondrop = (event) => {
+        event.preventDefault();
+        if (draggedSection) persistSectionOrder(state.noteId);
+        draggedSection = null;
+        section.classList.remove('dragging');
+      };
+      section.ondragend = () => {
+        if (draggedSection) persistSectionOrder(state.noteId, { toast: false });
+        draggedSection = null;
+        sections.forEach((item) => item.classList.remove('dragging'));
+      };
+    });
   }
 
   function bindViewEvents() {
@@ -2138,6 +2222,8 @@
 
     const savePaste = document.getElementById('save-paste-note');
     if (savePaste) savePaste.addEventListener('click', openSavePasteModal);
+
+    setupSectionSorting();
   }
 
   function createSampleOcrImage() {
@@ -5474,7 +5560,7 @@
     });
   }
 
-  function saveNoteDetail(noteId) {
+  function saveNoteDetail(noteId, options = {}) {
     const note = getNoteById(noteId);
     if (!note) return;
     const title = document.getElementById('detail-title')?.value.trim();
@@ -5482,10 +5568,13 @@
       .split(/[,，]/)
       .map((tag) => tag.trim().replace(/^#/, ''))
       .filter(Boolean);
-    const content = document.getElementById('detail-content')?.innerHTML || '';
+    const detailContent = document.getElementById('detail-content');
+    const contentClone = detailContent?.cloneNode(true);
+    contentClone?.querySelectorAll('.section-sort-controls').forEach((control) => control.remove());
+    const content = contentClone?.innerHTML || detailContent?.innerHTML || '';
     if (!title) {
       toast('笔记标题不能为空。', 'error');
-      return;
+      return false;
     }
     note.title = title;
     note.tags = tags.length ? [...new Set(tags)] : ['未分类'];
@@ -5493,9 +5582,10 @@
     note.contentHtml = sanitizeHtml(content);
     note.summary = stripHtml(note.contentHtml).slice(0, 110);
     note.updatedAt = new Date().toISOString();
-    persist();
-    render();
-    toast('修改已保存。', 'success');
+    persist({ reason: '编辑笔记' });
+    if (options.render !== false) render();
+    if (options.toast !== false) toast('修改已保存。', 'success');
+    return true;
   }
 
   function toggleNotePin(noteId, renderAfter = true) {
@@ -5906,7 +5996,7 @@
   function exportBackup() {
     const payload = {
       app: '任意笔记 Best Note',
-      version: '7.10',
+      version: '7.12',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -5967,18 +6057,33 @@
     render();
   }
 
+  function buildMergedSectionsHtml(notes = []) {
+    return notes
+      .map((note) => `<div data-section-id="${escapeHtml(note.id)}"><h3>${escapeHtml(note.title)}</h3>${sanitizeHtml(note.contentHtml)}</div>`)
+      .join('');
+  }
+
   function openMergeNotesModal() {
-    const selectedNotes = state.notes.filter((note) => state.selectedNoteIds.includes(note.id));
+    const selectedNotes = state.selectedNoteIds.map((id) => getNoteById(id)).filter(Boolean);
     if (selectedNotes.length < 2) {
       toast('请至少选择两条笔记。', 'error');
       return;
     }
+    const noteMap = new Map(selectedNotes.map((note) => [note.id, note]));
+    let mergeOrder = selectedNotes.map((note) => note.id);
     const suggestedTags = [...new Set(selectedNotes.flatMap((note) => note.tags || []))].slice(0, 6);
     const defaultTitle = `${selectedNotes[0].title} 等 ${selectedNotes.length} 条笔记`;
     showModal(`
-      <div class="modal">
+      <div class="modal merge-note-modal">
         <h2>合并笔记</h2>
-        <p>将 ${selectedNotes.length} 条笔记按当前顺序合并为一篇新笔记。</p>
+        <p>拖动章节，或使用上下按钮调整合并顺序。</p>
+        <div class="merge-order-card">
+          <div class="merge-order-head">
+            <span>合并顺序</span>
+            <small>合并完成后仍可继续排序</small>
+          </div>
+          <ol class="merge-order-list" id="merge-order-list"></ol>
+        </div>
         <label class="form-label" for="merge-note-title">合并后的标题</label>
         <input class="detail-title-input" style="width:100%;font-size:20px;padding:10px;border:1px solid var(--line);border-radius:12px" id="merge-note-title" value="${escapeHtml(defaultTitle)}" />
         <label class="form-label" for="merge-note-tags" style="margin-top:16px">标签</label>
@@ -5993,17 +6098,79 @@
         </div>
       </div>
     `);
+    const orderList = document.getElementById('merge-order-list');
+    const renderMergeOrder = () => {
+      orderList.innerHTML = mergeOrder.map((id, index) => {
+        const note = noteMap.get(id);
+        return `
+          <li class="merge-order-item" draggable="true" data-merge-id="${escapeHtml(id)}">
+            <span class="merge-drag-handle" title="拖动排序">⠿</span>
+            <span class="merge-order-number">${index + 1}</span>
+            <div class="merge-order-title">
+              <strong>${escapeHtml(note?.title || '未命名笔记')}</strong>
+              <small>${escapeHtml(note?.folder || '未分类')}</small>
+            </div>
+            <span class="merge-order-actions">
+              <button type="button" data-merge-move="up" ${index === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
+              <button type="button" data-merge-move="down" ${index === mergeOrder.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
+            </span>
+          </li>
+        `;
+      }).join('');
+    };
+    let mergeDragId = null;
+    const moveMergeItem = (id, direction) => {
+      const index = mergeOrder.indexOf(id);
+      const target = direction === 'up' ? index - 1 : index + 1;
+      if (index < 0 || target < 0 || target >= mergeOrder.length) return;
+      [mergeOrder[index], mergeOrder[target]] = [mergeOrder[target], mergeOrder[index]];
+      renderMergeOrder();
+    };
+    orderList.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-merge-move]');
+      if (!button) return;
+      const item = button.closest('[data-merge-id]');
+      moveMergeItem(item.dataset.mergeId, button.dataset.mergeMove);
+    });
+    orderList.addEventListener('dragstart', (event) => {
+      const item = event.target.closest('[data-merge-id]');
+      if (!item) return;
+      mergeDragId = item.dataset.mergeId;
+      item.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', mergeDragId);
+    });
+    orderList.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      const target = event.target.closest('[data-merge-id]');
+      const dragged = [...orderList.querySelectorAll('[data-merge-id]')].find((item) => item.dataset.mergeId === mergeDragId);
+      if (!target || !dragged || target === dragged) return;
+      const rect = target.getBoundingClientRect();
+      if (event.clientY > rect.top + rect.height / 2) target.after(dragged);
+      else target.before(dragged);
+    });
+    orderList.addEventListener('drop', (event) => {
+      event.preventDefault();
+      mergeOrder = [...orderList.querySelectorAll('[data-merge-id]')].map((item) => item.dataset.mergeId);
+      renderMergeOrder();
+      mergeDragId = null;
+    });
+    orderList.addEventListener('dragend', () => {
+      mergeOrder = [...orderList.querySelectorAll('[data-merge-id]')].map((item) => item.dataset.mergeId);
+      renderMergeOrder();
+      mergeDragId = null;
+    });
+    renderMergeOrder();
     document.getElementById('merge-note-title')?.focus();
     document.getElementById('confirm-merge-notes')?.addEventListener('click', () => {
       const titleInput = document.getElementById('merge-note-title');
       const tagsInput = document.getElementById('merge-note-tags');
       const deleteOriginals = document.getElementById('merge-delete-originals')?.checked;
+      const orderedNotes = mergeOrder.map((id) => noteMap.get(id)).filter(Boolean);
       const title = titleInput.value.trim() || defaultTitle;
       const tags = tagsInput.value.split(/[,，]/).map((tag) => tag.trim().replace(/^#/, '')).filter(Boolean);
-      const contentHtml = selectedNotes
-        .map((note) => `<h3>${escapeHtml(note.title)}</h3>${sanitizeHtml(note.contentHtml)}`)
-        .join('');
-      const folders = [...new Set(selectedNotes.map((note) => note.folder || '未分类'))];
+      const contentHtml = buildMergedSectionsHtml(orderedNotes);
+      const folders = [...new Set(orderedNotes.map((note) => note.folder || '未分类'))];
       const now = new Date().toISOString();
       const mergedNote = {
         id: `note-${Date.now()}`,
@@ -6011,7 +6178,7 @@
         type: 'general',
         folder: folders.length === 1 ? folders[0] : '合并笔记',
         tags: tags.length ? [...new Set(tags)] : ['合并'],
-        summary: `由 ${selectedNotes.length} 条笔记合并：${selectedNotes.map((note) => note.title).join('、')}`.slice(0, 110),
+        summary: `由 ${orderedNotes.length} 条笔记合并：${orderedNotes.map((note) => note.title).join('、')}`.slice(0, 110),
         contentHtml,
         createdAt: now,
         updatedAt: now
@@ -6027,10 +6194,11 @@
       state.notes.unshift(mergedNote);
       state.noteSelectionMode = false;
       state.selectedNoteIds = [];
-      persist();
+      state.sectionSortMode = true;
+      persist({ reason: '合并笔记' });
       closeModal();
       navigate('note', { noteId: mergedNote.id });
-      toast(`已合并 ${selectedNotes.length} 条笔记。`, 'success');
+      toast(`已按指定顺序合并 ${orderedNotes.length} 条笔记。`, 'success');
     });
   }
 
@@ -6540,6 +6708,26 @@
       return;
     }
 
+    const toggleSectionSort = event.target.closest('[data-toggle-section-sort]');
+    if (toggleSectionSort) {
+      const noteId = toggleSectionSort.dataset.toggleSectionSort;
+      if (state.sectionSortMode) {
+        persistSectionOrder(noteId, { toast: false });
+      } else if (saveNoteDetail(noteId, { render: false, toast: false }) === false) {
+        return;
+      }
+      state.sectionSortMode = !state.sectionSortMode;
+      render();
+      toast(state.sectionSortMode ? '已进入章节排序模式。' : '已退出章节排序模式。', 'success');
+      return;
+    }
+
+    const moveSection = event.target.closest('[data-move-section]');
+    if (moveSection) {
+      moveSectionByButton(moveSection);
+      return;
+    }
+
     const save = event.target.closest('[data-save-note]');
     if (save) {
       saveNoteDetail(save.dataset.saveNote);
@@ -6646,7 +6834,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.10',
+      version: '7.12',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -6656,6 +6844,7 @@
       sanitizeHtml,
       matrixToHtml: (matrix) => tableMatrixToHtml(matrix, true),
       matrixFromHtml: (html) => getTableMatrix(html),
+      mergeSectionsHtml: (notes) => buildMergedSectionsHtml(notes),
       supportsIndexedDb: Boolean(window.indexedDB),
       correctTime: (value) => correctOcrTimeCell(value),
       normalizeTimes: (values) => normalizeOcrTimeSequence(values),
