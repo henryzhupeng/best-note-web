@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0b4d9b" />
+  <meta name="theme-color" content="#4070f4" />
   <meta name="description" content="优记 BestNote - 免注册、本地存储的网页 AI 笔记，把图片、OCR 和粘贴文字整理成结构化笔记。" />
   <title>优记 BestNote · 网页 AI 笔记</title>
-  <link rel="stylesheet" href="./styles.css?v=7.15" />
+  <link rel="stylesheet" href="./styles.css?v=7.17" />
   <link rel="manifest" href="./manifest.json" />
 </head>
 <body>
@@ -56,12 +56,23 @@
           </div>
         </div>
         <button class="install-button" type="button" data-install-app>⤓ 安装到手机 / 桌面</button>
-        <p class="version">Web Prototype · v7.15</p>
+        <p class="version">Web Prototype · v7.17</p>
       </div>
     </aside>
 
     <main class="main-content">
       <header class="topbar">
+        <a class="workspace-brand" href="#" data-route="workspace" aria-label="优记工作台">
+          <svg class="workspace-logo" viewBox="0 0 40 40" aria-hidden="true">
+            <path d="M20 3.5 34.5 11.8v16.4L20 36.5 5.5 28.2V11.8L20 3.5Z" />
+            <path class="workspace-logo-check" d="m13.2 20.2 4.5 4.5 9-10" />
+          </svg>
+          <span><strong>优记</strong><small>BestNote</small></span>
+        </a>
+        <div class="workspace-top-actions">
+          <button class="top-action-primary" type="button" data-mobile-import="gallery" id="top-ocr-button"><span class="top-action-icon">＋</span><span id="top-ocr-label">上传图片 OCR</span></button>
+          <button class="top-action-secondary" type="button" data-workspace-new>新建笔记</button>
+        </div>
         <button class="mobile-brand" data-route="home" aria-label="返回首页">
           <span class="brand-mark small">优</span>
           <strong>优记</strong>
@@ -96,6 +107,6 @@
   <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
   <div id="modal-root"></div>
 
-  <script src="./app.js?v=7.15"></script>
+  <script src="./app.js?v=7.17"></script>
 </body>
 </html>

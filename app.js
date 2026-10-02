@@ -399,14 +399,17 @@
     notes: seedNotes,
     deletedNotes: [],
     customFolders: [],
-    route: 'home',
-    noteId: null,
+    route: 'workspace',
+    noteId: 'seed-stock',
     search: '',
     filter: '全部',
     folderFilter: '全部文件夹',
     noteSelectionMode: false,
     selectedNoteIds: [],
     sectionSortMode: false,
+    workspaceMode: 'rich',
+    workspaceMarkdownDraft: '',
+    workspaceListOpen: false,
     importFiles: [],
     ocrFiles: [],
     importTemplate: 'auto',
@@ -455,7 +458,9 @@
   const sourceAssetMemory = new Map();
   let activeSourceObjectUrl = null;
   let draggedSection = null;
+  let draggedWorkspaceNote = null;
   let saveStatusTimer = null;
+  let workspaceAutosaveTimer = null;
   let activeTheme = localStorage.getItem('best-note-theme') || 'light';
   const root = document.getElementById('view-root');
   const toastRegion = document.getElementById('toast-region');
@@ -507,10 +512,17 @@
 
   function setSaveStatus(text, tone = '') {
     const status = document.getElementById('save-status');
-    if (!status) return;
-    status.textContent = text;
-    status.classList.toggle('saving', tone === 'saving');
-    status.classList.toggle('saved', tone === 'saved');
+    if (status) {
+      status.textContent = text;
+      status.classList.toggle('saving', tone === 'saving');
+      status.classList.toggle('saved', tone === 'saved');
+    }
+    const workspaceStatus = document.getElementById('workspace-save-status');
+    if (workspaceStatus) {
+      workspaceStatus.textContent = text;
+      workspaceStatus.classList.toggle('saving', tone === 'saving');
+      workspaceStatus.classList.toggle('saved', tone === 'saved');
+    }
   }
 
   function openDatabase() {
@@ -1049,6 +1061,8 @@
   }
 
   function render() {
+    document.body.classList.toggle('workspace-mode', state.route === 'workspace');
+    if (state.route === 'workspace') root.innerHTML = renderWorkspace();
     if (state.route === 'home') root.innerHTML = renderHome();
     if (state.route === 'notes') root.innerHTML = renderNotes();
     if (state.route === 'trash') root.innerHTML = renderTrash();
@@ -1065,6 +1079,7 @@
 
     globalSearch.value = state.search;
     updateNav();
+    updateTopActions();
     updateTrashCount();
     bindViewEvents();
     window.scrollTo({ top: 0, behavior: 'auto' });
@@ -1089,6 +1104,145 @@
         <button class="btn secondary small" type="button" data-mobile-import="camera">⌾ 拍照</button>
         <button class="btn secondary small" type="button" data-mobile-import="gallery">▧ 相册</button>
         <button class="btn secondary small" type="button" data-paste-image>⇩ 粘贴截图</button>
+      </div>
+    `;
+  }
+
+  function workspaceNoteItem(note) {
+    const active = note.id === state.noteId;
+    const hasImages = Boolean(note.sourceImages?.length);
+    const preview = note.summary || stripHtml(note.contentHtml).slice(0, 80);
+    return `
+      <article class="workspace-note-item ${active ? 'active' : ''}" draggable="true" data-workspace-note="${escapeHtml(note.id)}" tabindex="0">
+        <span class="workspace-note-kind ${hasImages ? 'image-note' : 'text-note'}" title="${hasImages ? '含图片笔记' : '纯文本笔记'}">${hasImages ? '▧' : '≡'}</span>
+        <div class="workspace-note-copy">
+          <strong>${escapeHtml(note.title)}</strong>
+          <p>${escapeHtml(preview)}</p>
+          <span>${formatDateTime(note.updatedAt)}${note.tags?.[0] ? ` · #${escapeHtml(note.tags[0])}` : ''}</span>
+        </div>
+        <button class="workspace-note-delete" type="button" data-quick-delete="${escapeHtml(note.id)}" aria-label="删除笔记">×</button>
+      </article>
+    `;
+  }
+
+  function renderWorkspaceList() {
+    const keyword = state.search.trim().toLowerCase();
+    const visible = state.notes.filter((note) => {
+      if (!keyword) return true;
+      return [note.title, note.summary, note.folder, ...(note.tags || []), stripHtml(note.contentHtml)].join(' ').toLowerCase().includes(keyword);
+    });
+    const sorted = [...visible].sort((a, b) => {
+      const ao = Number.isFinite(a.order) ? a.order : Number.MAX_SAFE_INTEGER;
+      const bo = Number.isFinite(b.order) ? b.order : Number.MAX_SAFE_INTEGER;
+      return ao - bo || new Date(b.updatedAt) - new Date(a.updatedAt);
+    });
+    const groups = new Map();
+    sorted.forEach((note) => {
+      const folder = note.folder || '未分类';
+      if (!groups.has(folder)) groups.set(folder, []);
+      groups.get(folder).push(note);
+    });
+    return `
+      <div class="workspace-list-head">
+        <div><span>笔记</span><small>${state.notes.length} 条</small></div>
+        <button class="btn small" type="button" data-workspace-new>＋ 新建</button>
+      </div>
+      <div class="workspace-list-top">
+        <button class="text-link" type="button" data-route="notes">全部笔记</button>
+        <button class="text-link" type="button" data-route="backup">数据备份</button>
+      </div>
+      <div class="workspace-folder-list">
+        ${groups.size ? [...groups.entries()].map(([folder, notes]) => `
+          <section class="workspace-folder" data-workspace-folder="${escapeHtml(folder)}">
+            <header><span>${escapeHtml(folder)}</span><small>${notes.length}</small></header>
+            <div class="workspace-note-list">${notes.map(workspaceNoteItem).join('')}</div>
+          </section>
+        `).join('') : `
+          <div class="workspace-list-empty">
+            <span class="workspace-empty-logo">✓</span>
+            <strong>${state.notes.length ? '没有找到笔记' : '从一张图片开始'}</strong>
+            <p>${state.notes.length ? '尝试清除搜索，或新建一条笔记。' : '上传截图，优记会自动提取文字并整理成结构化笔记。'}</p>
+            <button class="btn" type="button" data-mobile-import="gallery">上传图片 OCR</button>
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  function renderWorkspaceEditor() {
+    const note = getNoteById(state.noteId) || state.notes[0];
+    if (!note) {
+      return `
+        <div class="workspace-editor-empty">
+          <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 8 54 20v24L32 56 10 44V20L32 8Z"/><path d="m22 33 7 7 14-16"/></svg>
+          <h1>开始记录</h1>
+          <p>上传图片提取文字，或直接粘贴外部 OCR / AI 结果。</p>
+          <div class="workspace-empty-actions">
+            <button class="btn" type="button" data-route="ocr">上传图片</button>
+            <button class="btn secondary" type="button" data-route="paste">粘贴文字</button>
+          </div>
+        </div>
+      `;
+    }
+    const hasTable = /<table[\s>]/i.test(note.contentHtml || '');
+    const markdownSource = state.workspaceMarkdownDraft || noteMarkdownBody(note);
+    const markdownPreview = markdownToPreviewHtml(markdownSource);
+    return `
+      <div class="workspace-editor-head">
+        <div class="workspace-breadcrumb"><span class="workspace-status-dot"></span>${escapeHtml(note.folder || '未分类')}</div>
+        <div class="workspace-editor-actions">
+          <button class="workspace-list-toggle" type="button" data-workspace-list-toggle>笔记列表</button>
+          <div class="workspace-mode-switch" role="group" aria-label="编辑模式">
+            <button type="button" data-workspace-mode="rich" class="${state.workspaceMode === 'rich' ? 'active' : ''}">编辑</button>
+            <button type="button" data-workspace-mode="markdown" class="${state.workspaceMode === 'markdown' ? 'active' : ''}">Markdown</button>
+          </div>
+          <button class="btn small" type="button" data-mobile-import="gallery">＋ 图片 OCR</button>
+          <button class="btn secondary small" type="button" data-rerun-ocr="${escapeHtml(note.id)}" ${note.sourceImages?.length ? '' : 'disabled'}>重新 OCR</button>
+          <button class="btn secondary small" type="button" data-paste-image>粘贴图片</button>
+          <button class="btn secondary small" type="button" data-export="${escapeHtml(note.id)}">导出</button>
+          <button class="btn danger small icon-only" type="button" data-delete-note="${escapeHtml(note.id)}" title="删除笔记">×</button>
+        </div>
+      </div>
+      <label class="workspace-image-dropzone" id="workspace-dropzone">
+        <input id="workspace-image-input" type="file" accept="image/*" multiple />
+        <span class="workspace-upload-icon">＋</span>
+        <span><strong>拖拽图片到这里，或点击上传</strong><small>单张或批量截图都可以；识别后图片和文字分区展示</small></span>
+      </label>
+      <article class="workspace-paper">
+        <input class="workspace-title-input" id="detail-title" value="${escapeHtml(note.title)}" aria-label="笔记标题" />
+        <div class="workspace-meta-row">
+          <input id="detail-tags" value="${escapeHtml(note.tags.join(', '))}" aria-label="笔记标签，用逗号分隔" placeholder="标签，用逗号分隔" />
+          <label class="workspace-folder-select"><span>文件夹</span><select id="detail-folder">${getFolderOptions().filter((folder) => folder !== '全部文件夹').map((folder) => `<option value="${escapeHtml(folder)}" ${folder === (note.folder || '未分类') ? 'selected' : ''}>${escapeHtml(folder)}</option>`).join('')}</select></label>
+        </div>
+        ${renderNoteSources(note)}
+        <div class="workspace-section-label"><span>识别文字与编辑内容</span><small>${state.workspaceMode === 'markdown' ? 'Markdown 源码' : '可直接编辑'}</small></div>
+        ${state.workspaceMode === 'markdown' ? `
+          <div class="markdown-editor-grid">
+            <textarea class="markdown-source" id="workspace-markdown-source" spellcheck="false" aria-label="Markdown 编辑区">${escapeHtml(markdownSource)}</textarea>
+            <div class="markdown-preview" id="workspace-markdown-preview">${markdownPreview}</div>
+          </div>
+          <div class="workspace-save-row">
+            <span id="workspace-save-status" class="workspace-save-status">已自动保存</span>
+            <button class="btn secondary" type="button" id="save-markdown-note" data-save-markdown-note="${escapeHtml(note.id)}">立即保存</button>
+          </div>
+        ` : `
+          <div class="detail-content workspace-content" id="detail-content" contenteditable="true">${sanitizeHtml(note.contentHtml)}</div>
+          <div class="workspace-save-row">
+            <span id="workspace-save-status" class="workspace-save-status">已自动保存</span>
+            <button class="btn secondary" type="button" data-save-note="${escapeHtml(note.id)}">立即保存</button>
+          </div>
+        `}
+      </article>
+    `;
+  }
+
+  function renderWorkspace() {
+    const note = getNoteById(state.noteId) || state.notes[0];
+    if (note) state.noteId = note.id;
+    return `
+      <div class="workspace-shell">
+        <aside class="workspace-list-pane ${state.workspaceListOpen ? 'open' : ''}">${renderWorkspaceList()}</aside>
+        <section class="workspace-editor-pane">${renderWorkspaceEditor()}</section>
       </div>
     `;
   }
@@ -2100,6 +2254,13 @@
     `;
   }
 
+  function updateTopActions() {
+    const button = document.getElementById('top-ocr-button');
+    const label = document.getElementById('top-ocr-label');
+    if (button) button.classList.toggle('loading', state.busy);
+    if (label) label.textContent = state.busy ? '识别中…' : '上传图片 OCR';
+  }
+
   function updateNav() {
     document.querySelectorAll('[data-route]').forEach((element) => {
       const route = element.dataset.route;
@@ -2124,6 +2285,120 @@
     if (route !== 'note') state.sectionSortMode = false;
     if (route !== 'import' && state.aiResult) state.aiResult = state.aiResult;
     render();
+  }
+
+  async function rerunOcrForNote(noteId) {
+    const note = getNoteById(noteId);
+    if (!note?.sourceImages?.length) {
+      toast('这条笔记没有保存原始截图，无法重新 OCR。', 'error');
+      return;
+    }
+    const records = await getAllAssetRecords();
+    const record = records.find((item) => item.id === noteId);
+    if (!record?.images?.length) {
+      toast('没有找到原始截图文件，请重新上传图片。', 'error');
+      return;
+    }
+    const files = record.images.map((image, index) => new File(
+      [image.data],
+      image.name || `${note.title}-${index + 1}.png`,
+      { type: image.type || 'image/png' }
+    ));
+    navigate('ocr');
+    addFiles(files, 'ocr');
+    toast(`已载入 ${files.length} 张原始截图，可以重新识别。`, 'success');
+  }
+
+  function bindWorkspaceImageDropzone() {
+    const dropzone = document.getElementById('workspace-dropzone');
+    const input = document.getElementById('workspace-image-input');
+    if (!dropzone || !input) return;
+    const acceptFiles = (fileList) => {
+      const files = [...(fileList || [])].filter((file) => file.type.startsWith('image/'));
+      if (!files.length) return;
+      navigate('ocr');
+      addFiles(files, 'ocr');
+      toast(`已加入 ${files.length} 张图片，正在进入 OCR。`, 'success');
+    };
+    input.addEventListener('change', (event) => {
+      acceptFiles(event.target.files);
+      event.target.value = '';
+    });
+    ['dragenter', 'dragover'].forEach((type) => dropzone.addEventListener(type, (event) => {
+      event.preventDefault();
+      dropzone.classList.add('dragging');
+    }));
+    ['dragleave', 'drop'].forEach((type) => dropzone.addEventListener(type, (event) => {
+      event.preventDefault();
+      dropzone.classList.remove('dragging');
+    }));
+    dropzone.addEventListener('drop', (event) => acceptFiles(event.dataTransfer?.files));
+  }
+
+  function scheduleWorkspaceAutosave() {
+    if (state.route !== 'workspace') return;
+    clearTimeout(workspaceAutosaveTimer);
+    setSaveStatus('保存中…', 'saving');
+    workspaceAutosaveTimer = setTimeout(() => {
+      if (state.workspaceMode === 'markdown') {
+        saveMarkdownNote(state.noteId, { render: false, toast: false, reason: '自动保存 Markdown' });
+      } else {
+        saveNoteDetail(state.noteId, { render: false, toast: false, reason: '自动保存笔记' });
+      }
+    }, 700);
+  }
+
+  function setupWorkspaceNoteSorting() {
+    const list = document.querySelector('.workspace-folder-list');
+    if (!list) return;
+    const commit = () => {
+      const items = [...list.querySelectorAll('[data-workspace-note]')];
+      items.forEach((item, index) => {
+        const note = getNoteById(item.dataset.workspaceNote);
+        if (!note) return;
+        const folder = item.closest('[data-workspace-folder]')?.dataset.workspaceFolder;
+        note.order = index;
+        if (folder) note.folder = folder;
+      });
+      draggedWorkspaceNote = null;
+      list.querySelectorAll('.dragging').forEach((item) => item.classList.remove('dragging'));
+      persist({ reason: '调整笔记顺序' });
+      render();
+    };
+    list.addEventListener('dragstart', (event) => {
+      const item = event.target.closest('[data-workspace-note]');
+      if (!item || event.target.closest('button')) {
+        event.preventDefault();
+        return;
+      }
+      draggedWorkspaceNote = item.dataset.workspaceNote;
+      item.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedWorkspaceNote);
+    });
+    list.addEventListener('dragover', (event) => {
+      if (!draggedWorkspaceNote) return;
+      event.preventDefault();
+      const dragged = [...list.querySelectorAll('[data-workspace-note]')].find((item) => item.dataset.workspaceNote === draggedWorkspaceNote);
+      if (!dragged) return;
+      const targetItem = event.target.closest('[data-workspace-note]');
+      if (targetItem && targetItem !== dragged) {
+        const rect = targetItem.getBoundingClientRect();
+        if (event.clientY > rect.top + rect.height / 2) targetItem.after(dragged);
+        else targetItem.before(dragged);
+        return;
+      }
+      const targetFolder = event.target.closest('.workspace-folder');
+      if (targetFolder) targetFolder.querySelector('.workspace-note-list')?.append(dragged);
+    });
+    list.addEventListener('drop', (event) => {
+      if (!draggedWorkspaceNote) return;
+      event.preventDefault();
+      commit();
+    });
+    list.addEventListener('dragend', () => {
+      if (draggedWorkspaceNote) commit();
+    });
   }
 
   function getSortableSections() {
@@ -2453,6 +2728,23 @@
     const savePaste = document.getElementById('save-paste-note');
     if (savePaste) savePaste.addEventListener('click', openSavePasteModal);
 
+    const markdownSource = document.getElementById('workspace-markdown-source');
+    if (markdownSource) markdownSource.addEventListener('input', (event) => {
+      state.workspaceMarkdownDraft = event.target.value;
+      const preview = document.getElementById('workspace-markdown-preview');
+      if (preview) preview.innerHTML = markdownToPreviewHtml(state.workspaceMarkdownDraft);
+      scheduleWorkspaceAutosave();
+    });
+
+    ['detail-title', 'detail-tags', 'detail-content'].forEach((id) => {
+      const element = document.getElementById(id);
+      if (!element) return;
+      element.addEventListener('input', scheduleWorkspaceAutosave);
+    });
+    document.getElementById('detail-folder')?.addEventListener('change', scheduleWorkspaceAutosave);
+
+    bindWorkspaceImageDropzone();
+    setupWorkspaceNoteSorting();
     setupSectionSorting();
   }
 
@@ -5867,6 +6159,32 @@
     });
   }
 
+  function saveMarkdownNote(noteId, options = {}) {
+    const note = getNoteById(noteId);
+    if (!note) return;
+    const title = document.getElementById('detail-title')?.value.trim();
+    const tags = document.getElementById('detail-tags')?.value.split(/[,，]/).map((tag) => tag.trim().replace(/^#/, '')).filter(Boolean);
+    const folder = document.getElementById('detail-folder')?.value || note.folder || '未分类';
+    const source = document.getElementById('workspace-markdown-source')?.value || state.workspaceMarkdownDraft || noteMarkdownBody(note);
+    if (!title) {
+      if (options.toast !== false) toast('笔记标题不能为空。', 'error');
+      return false;
+    }
+    const blocks = parseMarkdownToOcrBlocks(source.replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, ''));
+    const contentHtml = sanitizeHtml(blocksToHtml(blocks));
+    note.title = title;
+    note.tags = tags.length ? [...new Set(tags)] : ['未分类'];
+    note.folder = folder;
+    note.contentHtml = contentHtml;
+    note.summary = stripHtml(contentHtml).slice(0, 110);
+    note.updatedAt = new Date().toISOString();
+    state.workspaceMarkdownDraft = options.render === false ? source : '';
+    persist({ reason: options.reason || '保存 Markdown 笔记' });
+    if (options.render !== false) render();
+    if (options.toast !== false) toast('Markdown 已保存。', 'success');
+    return true;
+  }
+
   function saveNoteDetail(noteId, options = {}) {
     const note = getNoteById(noteId);
     if (!note) return;
@@ -5880,7 +6198,7 @@
     contentClone?.querySelectorAll('.section-sort-controls').forEach((control) => control.remove());
     const content = contentClone?.innerHTML || detailContent?.innerHTML || '';
     if (!title) {
-      toast('笔记标题不能为空。', 'error');
+      if (options.toast !== false) toast('笔记标题不能为空。', 'error');
       return false;
     }
     note.title = title;
@@ -5889,7 +6207,7 @@
     note.contentHtml = sanitizeHtml(content);
     note.summary = stripHtml(note.contentHtml).slice(0, 110);
     note.updatedAt = new Date().toISOString();
-    persist({ reason: '编辑笔记' });
+    persist({ reason: options.reason || '编辑笔记' });
     if (options.render !== false) render();
     if (options.toast !== false) toast('修改已保存。', 'success');
     return true;
@@ -6304,7 +6622,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.15',
+      version: '7.17',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -6834,6 +7152,19 @@
     }
   }
 
+  function noteMarkdownBody(note) {
+    return htmlToMarkdown(note).replace(/^#\s+.*\n+/, '');
+  }
+
+  function markdownToPreviewHtml(markdown) {
+    const source = String(markdown || '');
+    const images = [...source.matchAll(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g)]
+      .map((match) => `<figure><img src="${escapeHtml(match[2])}" alt="${escapeHtml(match[1] || '图片')}" loading="lazy" /><figcaption>${escapeHtml(match[1] || '')}</figcaption></figure>`)
+      .join('');
+    const textOnly = source.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '');
+    return `${images}${blocksToHtml(parseMarkdownToOcrBlocks(textOnly))}`;
+  }
+
   function htmlToMarkdown(note) {
     const container = document.createElement('div');
     container.innerHTML = sanitizeHtml(note.contentHtml);
@@ -7146,6 +7477,47 @@
       return;
     }
 
+    const workspaceNote = event.target.closest('[data-workspace-note]');
+    if (workspaceNote) {
+      state.noteId = workspaceNote.dataset.workspaceNote;
+      state.route = 'workspace';
+      state.workspaceMarkdownDraft = '';
+      state.workspaceListOpen = false;
+      render();
+      return;
+    }
+
+    if (event.target.closest('[data-workspace-new]')) {
+      navigate('paste');
+      return;
+    }
+
+    if (event.target.closest('[data-workspace-list-toggle]')) {
+      state.workspaceListOpen = !state.workspaceListOpen;
+      render();
+      return;
+    }
+
+    const rerunOcr = event.target.closest('[data-rerun-ocr]');
+    if (rerunOcr) {
+      rerunOcrForNote(rerunOcr.dataset.rerunOcr);
+      return;
+    }
+
+    const workspaceMode = event.target.closest('[data-workspace-mode]');
+    if (workspaceMode) {
+      state.workspaceMode = workspaceMode.dataset.workspaceMode || 'rich';
+      state.workspaceMarkdownDraft = '';
+      render();
+      return;
+    }
+
+    const saveMarkdown = event.target.closest('[data-save-markdown-note]');
+    if (saveMarkdown) {
+      saveMarkdownNote(saveMarkdown.dataset.saveMarkdownNote);
+      return;
+    }
+
     const openNote = event.target.closest('[data-open-note]');
     if (openNote) {
       if (state.noteSelectionMode) {
@@ -7310,6 +7682,10 @@
     state.search = event.target.value.trim();
     if (state.route === 'notes') {
       refreshNotesResults();
+    } else if (state.route === 'workspace') {
+      render();
+      globalSearch.focus();
+      globalSearch.setSelectionRange(state.search.length, state.search.length);
     } else if (state.search) {
       state.route = 'notes';
       state.filter = '全部';
@@ -7330,14 +7706,15 @@
     toast('优记已安装到当前设备。', 'success');
   });
 
+  const selfTestMode = new URLSearchParams(window.location.search).get('selftest') === '1';
   const requestedRoute = new URLSearchParams(window.location.search).get('route');
-  if (['home', 'import', 'ocr', 'paste', 'notes', 'examples', 'history', 'backup'].includes(requestedRoute)) {
+  if (['workspace', 'home', 'import', 'ocr', 'paste', 'notes', 'examples', 'history', 'backup'].includes(requestedRoute)) {
     state.route = requestedRoute;
   }
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.15',
+      version: '7.17',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -7367,5 +7744,7 @@
   applyTheme();
   setSaveStatus('已自动保存', 'saved');
   bindMobileImportInputs();
-  hydrateFromDatabase().then(consumeSharedPayload).finally(() => render());
+  hydrateFromDatabase().then(consumeSharedPayload).finally(() => {
+    if (!selfTestMode) render();
+  });
 })();
