@@ -6622,7 +6622,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.17',
+      version: '7.18',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -7098,18 +7098,48 @@
     toast(`已导出 ${formatLabel} 文件。`, 'success');
   }
 
+  function buildExportPaperHtml(note) {
+    const tags = (note.tags || []).map((tag) => `<span class="export-tag">#${escapeHtml(tag)}</span>`).join('');
+    const sources = (note.sourceImages || []).filter((source) => source.thumbnail);
+    const sourceHtml = sources.length
+      ? `<section class="export-sources"><h2>原始截图</h2><div class="export-source-grid">${sources.map((source, index) => `<figure><img src="${source.thumbnail}" alt="${escapeHtml(source.name || `原始截图 ${index + 1}`)}" /><figcaption>${escapeHtml(source.name || `原始截图 ${index + 1}`)}</figcaption></figure>`).join('')}</div></section>`
+      : '';
+    return `
+      <article class="export-note-paper">
+        <header>
+          <h1>${escapeHtml(note.title)}</h1>
+          <div class="export-meta">${formatDateTime(note.updatedAt)} · ${escapeHtml(note.folder || '未分类')} · 优记 BestNote</div>
+          <div class="export-tags">${tags}</div>
+        </header>
+        <main>${sanitizeHtml(note.contentHtml)}</main>
+        ${sourceHtml}
+        <footer>由优记 BestNote 导出</footer>
+      </article>
+    `;
+  }
+
   function exportNotePdf(note) {
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       toast('浏览器阻止了打印窗口，请允许弹出窗口后重试。', 'error');
       return;
     }
-    const tags = (note.tags || []).map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(' ');
+    const paper = buildExportPaperHtml(note);
     printWindow.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>${escapeHtml(note.title)}</title><style>
-      body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#111827;line-height:1.75;margin:42px;max-width:820px}
-      h1{font-size:30px;margin:0 0 8px}h3{font-size:17px;margin-top:24px}table{width:100%;border-collapse:collapse;margin:14px 0}th,td{border:1px solid #d1d5db;padding:8px 10px;text-align:left;vertical-align:top}th{background:#f3f4f6}
-      .meta{color:#6b7280;font-size:12px;margin-bottom:22px}.tags span{display:inline-block;margin-right:7px;color:#2563eb}@media print{body{margin:12mm}}
-    </style></head><body><h1>${escapeHtml(note.title)}</h1><div class="meta">${formatDateTime(note.updatedAt)} · 文件夹：${escapeHtml(note.folder || '未分类')}</div><div class="tags">${tags}</div><hr>${sanitizeHtml(note.contentHtml)}<script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
+      @page{size:A4;margin:12mm}
+      *{box-sizing:border-box}
+      body{margin:0;background:#fff;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;font-size:12px;line-height:1.75}
+      .export-note-paper{width:100%;max-width:820px;margin:0 auto;padding:12px}
+      .export-note-paper h1{margin:0 0 8px;font-size:28px;line-height:1.25;overflow-wrap:anywhere}
+      .export-note-paper h2{font-size:17px;margin:22px 0 8px}.export-note-paper h3{font-size:15px;margin:20px 0 7px}
+      .export-meta,.export-tag{color:#667085;font-size:10px}.export-tag{display:inline-block;margin:0 6px 0 0}
+      .export-note-paper main{margin-top:22px;overflow-wrap:anywhere}.export-note-paper p,.export-note-paper li{overflow-wrap:anywhere}
+      .export-note-paper table{width:100%;border-collapse:collapse;margin:14px 0;table-layout:fixed}.export-note-paper th,.export-note-paper td{border:1px solid #d0d5dd;padding:8px 9px;text-align:left;vertical-align:top;word-break:break-word}
+      .export-note-paper th{background:#f2f4f7}.export-note-paper tr{page-break-inside:avoid}
+      .export-sources{margin-top:28px}.export-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+      .export-source-grid figure{margin:0;border:1px solid #e4e7ec;border-radius:8px;padding:8px}.export-source-grid img{display:block;width:100%;max-height:420px;object-fit:contain;border-radius:6px}.export-source-grid figcaption{margin-top:5px;color:#667085;font-size:9px}
+      footer{margin-top:30px;padding-top:12px;border-top:1px solid #e4e7ec;color:#98a2b3;font-size:9px}
+    </style></head><body>${paper}<script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
     printWindow.document.close();
   }
 
@@ -7129,26 +7159,43 @@
   }
 
   async function exportNotePng(note) {
+    let host = null;
     try {
       const html2canvas = await loadHtml2Canvas();
-      if (state.route !== 'note' || state.noteId !== note.id) navigate('note', { noteId: note.id });
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const target = document.querySelector('.detail-paper');
+      host = document.createElement('div');
+      host.className = 'png-export-host';
+      host.innerHTML = buildExportPaperHtml(note);
+      document.body.appendChild(host);
+      await Promise.all([...host.querySelectorAll('img')].map((image) => image.complete ? Promise.resolve() : new Promise((resolve) => {
+        image.onload = resolve;
+        image.onerror = resolve;
+      })));
+      const target = host.querySelector('.export-note-paper');
       if (!target) throw new Error('没有找到可导出的笔记内容。');
+      const width = Math.max(target.scrollWidth, target.offsetWidth, 1100);
+      const height = Math.max(target.scrollHeight, target.offsetHeight);
       const canvas = await html2canvas(target, {
         scale: 2,
-        backgroundColor: activeTheme === 'dark' ? '#0f172a' : '#fffef9',
+        backgroundColor: '#ffffff',
         useCORS: true,
-        logging: false
+        logging: false,
+        width,
+        height,
+        windowWidth: width + 80,
+        windowHeight: height + 80,
+        scrollX: 0,
+        scrollY: 0
       });
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
       if (!blob) throw new Error('PNG 生成失败。');
-      const safeName = note.title.replace(/[\/:*?"<>|]/g, '-').slice(0, 60) || '笔记';
+      const safeName = note.title.replace(/[\\/:*?"<>|]/g, '-').slice(0, 60) || '笔记';
       downloadBlob(`${safeName}.png`, blob, 'image/png');
       toast('PNG 已开始下载。', 'success');
     } catch (error) {
       console.error('PNG export failed:', error);
       toast(error.message || 'PNG 导出失败。', 'error');
+    } finally {
+      host?.remove();
     }
   }
 
@@ -7165,30 +7212,56 @@
     return `${images}${blocksToHtml(parseMarkdownToOcrBlocks(textOnly))}`;
   }
 
+  function htmlElementToMarkdown(element, lines, depth = 0) {
+    if (!element) return;
+    if (element.tagName === 'H3') {
+      lines.push(`## ${element.textContent.trim()}`, '');
+      return;
+    }
+    if (element.tagName === 'P') {
+      lines.push(element.textContent.trim(), '');
+      return;
+    }
+    if (element.tagName === 'UL' || element.tagName === 'OL') {
+      [...element.children].forEach((item, index) => {
+        lines.push(`${'  '.repeat(depth)}${element.tagName === 'OL' ? `${index + 1}.` : '-'} ${item.textContent.trim()}`);
+      });
+      lines.push('');
+      return;
+    }
+    if (element.tagName === 'TABLE') {
+      const rows = [...element.querySelectorAll('tr')].map((row) => [...row.children].map((cell) => cell.textContent.trim().replaceAll('|', '\\|')));
+      if (rows.length) {
+        lines.push(`| ${rows[0].join(' | ')} |`);
+        lines.push(`| ${rows[0].map(() => '---').join(' | ')} |`);
+        rows.slice(1).forEach((row) => lines.push(`| ${row.join(' | ')} |`));
+        lines.push('');
+      }
+      return;
+    }
+    if (element.tagName === 'BLOCKQUOTE') {
+      lines.push(`> ${element.textContent.trim()}`, '');
+      return;
+    }
+    if (element.tagName === 'IMG') {
+      lines.push(`![${element.getAttribute('alt') || '图片'}](${element.getAttribute('src') || ''})`, '');
+      return;
+    }
+    [...element.children].forEach((child) => htmlElementToMarkdown(child, lines, depth + 1));
+  }
+
   function htmlToMarkdown(note) {
     const container = document.createElement('div');
     container.innerHTML = sanitizeHtml(note.contentHtml);
     const lines = [`# ${note.title}`, ''];
     if (note.tags?.length) lines.push(`标签：${note.tags.map((tag) => `#${tag}`).join(' ')}`, '');
-    [...container.children].forEach((element) => {
-      if (element.tagName === 'H3') {
-        lines.push(`## ${element.textContent.trim()}`, '');
-      } else if (element.tagName === 'P') {
-        lines.push(element.textContent.trim(), '');
-      } else if (element.tagName === 'UL' || element.tagName === 'OL') {
-        [...element.children].forEach((item, index) => lines.push(`${element.tagName === 'OL' ? `${index + 1}.` : '-'} ${item.textContent.trim()}`));
-        lines.push('');
-      } else if (element.tagName === 'TABLE') {
-        const rows = [...element.querySelectorAll('tr')].map((row) => [...row.children].map((cell) => cell.textContent.trim().replaceAll('|', '\\|')));
-        if (rows.length) {
-          lines.push(`| ${rows[0].join(' | ')} |`);
-          lines.push(`| ${rows[0].map(() => '---').join(' | ')} |`);
-          rows.slice(1).forEach((row) => lines.push(`| ${row.join(' | ')} |`));
-          lines.push('');
-        }
-      }
-    });
-    return lines.join('\n');
+    [...container.children].forEach((element) => htmlElementToMarkdown(element, lines));
+    if (note.sourceImages?.length) {
+      lines.push('## 原始截图', '');
+      note.sourceImages.forEach((source, index) => lines.push(`- ${source.name || `原始截图 ${index + 1}`}`));
+      lines.push('');
+    }
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
   }
 
   function htmlToExcel(note) {
@@ -7714,7 +7787,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.17',
+      version: '7.18',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -7727,6 +7800,10 @@
       mergeSectionsHtml: (notes) => buildMergedSectionsHtml(notes),
       structureText: (template, text) => buildStructuredTextHtml(template, buildBlocksForText(text), text),
       resolveTextTemplate: (template, text) => resolveTextTemplate(template, text),
+      buildExportPaperHtml: (note) => buildExportPaperHtml(note),
+      noteToMarkdown: (note) => htmlToMarkdown(note),
+      noteToExcel: (note) => htmlToExcel(note),
+      plainText: (html) => stripHtml(html),
       supportsIndexedDb: Boolean(window.indexedDB),
       correctTime: (value) => correctOcrTimeCell(value),
       normalizeTimes: (values) => normalizeOcrTimeSequence(values),

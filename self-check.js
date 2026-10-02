@@ -163,9 +163,34 @@
       }
     },
     {
-      name: '应用版本为 v7.17',
+      name: 'Markdown、PDF 排版、Excel 和纯文本导出结构完整',
       run(api) {
-        assert(api.version === '7.17', `版本为 ${api.version}`);
+        const note = {
+          title: '导出格式测试',
+          tags: ['测试', '导出'],
+          folder: '工作',
+          updatedAt: '2026-10-02T12:34:56.000Z',
+          sourceImages: [{ name: '截图.png', thumbnail: 'data:image/png;base64,AAAA' }],
+          contentHtml: '<div data-section-id="section-a"><h3>章节标题</h3><p>正文内容</p><ul><li>列表一</li><li>列表二</li></ul><table><thead><tr><th>参数</th><th>值</th></tr></thead><tbody><tr><td>A</td><td>1</td></tr></tbody></table></div>'
+        };
+        const markdown = api.noteToMarkdown(note);
+        assert(markdown.includes('## 章节标题'), 'Markdown 缺少嵌套章节');
+        assert(markdown.includes('列表一'), 'Markdown 缺少列表');
+        assert(markdown.includes('| 参数 | 值 |'), 'Markdown 缺少表格');
+        const paper = api.buildExportPaperHtml(note);
+        assert(paper.includes('导出格式测试'), 'PDF/PNG 排版缺少标题');
+        assert(paper.includes('原文截图') || paper.includes('截图.png'), 'PDF/PNG 排版缺少原图');
+        assert(paper.includes('章节标题'), 'PDF/PNG 排版缺少正文');
+        const excel = api.noteToExcel(note);
+        assert(excel.includes('参数') && excel.includes('A'), 'Excel 缺少表格内容');
+        const text = api.plainText(note.contentHtml);
+        assert(text.includes('正文内容') && text.includes('列表二'), '纯文本缺少正文');
+      }
+    },
+    {
+      name: '应用版本为 v7.18',
+      run(api) {
+        assert(api.version === '7.18', `版本为 ${api.version}`);
       }
     }
   ];
