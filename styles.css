@@ -4878,7 +4878,8 @@ body {
 
 .workspace-breadcrumb { display: flex; align-items: center; gap: 7px; color: var(--ink-faint); font-size: 10px; font-weight: 700; }
 .workspace-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
-.workspace-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.workspace-editor-actions { display: grid; justify-items: end; gap: 6px; }
+.workspace-action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .workspace-mode-switch { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
 .workspace-mode-switch button { padding: 6px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-faint); font-size: 9px; font-weight: 750; cursor: pointer; }
 .workspace-mode-switch button.active { background: var(--primary); color: #fff; }
@@ -4940,7 +4941,8 @@ body {
   .workspace-list-pane { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .workspace-editor-pane { overflow: visible; padding: 16px 12px 40px; }
   .workspace-editor-head { align-items: flex-start; flex-direction: column; }
-  .workspace-editor-actions { justify-content: flex-start; }
+  .workspace-editor-actions { justify-items: start; }
+  .workspace-action-row { justify-content: flex-start; }
   .workspace-paper { min-height: 0; padding: 22px 16px; }
   .workspace-title-input { font-size: 27px; }
 }
@@ -5635,19 +5637,41 @@ canvas { max-width: 100%; }
 
 /* ---- v7.30: 便签正文按行删除 ---- */
 .workspace-content-shell { position: relative; }
-.line-delete-btn {
+.block-actions {
   position: absolute;
   z-index: 3;
-  padding: 3px 10px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   background: var(--surface);
-  color: var(--ink-soft);
-  font-size: 10.5px;
-  font-weight: 700;
   box-shadow: 0 2px 8px rgba(22, 32, 29, .08);
-  cursor: pointer;
-  white-space: nowrap;
 }
-.line-delete-btn:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
-.line-delete-btn[hidden] { display: none; }
+.block-actions[hidden] { display: none; }
+.block-actions button {
+  width: 26px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.block-actions button:hover { background: var(--surface-muted); color: var(--ink); }
+.block-actions button[data-block-action="delete"]:hover { background: var(--danger-soft); color: var(--danger); }
+.block-actions button[hidden] { display: none; }
+.detail-content img { max-width: 100%; height: auto; border-radius: 8px; display: block; margin: 4px 0; }
+.inline-image-toggle { margin-top: 12px; }
+.workspace-content-shell .detail-content p[data-image-block] { margin: 10px 0; }
+
+/* ---- v7.32: 页面头部按钮分行 ---- */
+.page-head-actions-rows { display: grid; justify-items: end; gap: 8px; }
+.page-head-row { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+@media (max-width: 760px) {
+  .page-head-actions-rows { justify-items: start; }
+  .page-head-row { justify-content: flex-start; }
+}

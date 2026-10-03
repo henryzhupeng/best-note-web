@@ -444,6 +444,7 @@
     imageNoteFolder: '未分类',
     imageNoteBody: '',
     imageNoteCrops: [],
+    imageNoteInlineImages: false,
     ocrReturnNoteId: null,
     workspaceCursorBlockIndex: null,
     navHistory: [],
@@ -949,7 +950,7 @@
     const parser = new DOMParser();
     const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
     const wrapper = doc.body.firstElementChild;
-    const allowed = new Set(['H3', 'P', 'UL', 'OL', 'LI', 'STRONG', 'EM', 'BR', 'TABLE', 'COLGROUP', 'COL', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'BLOCKQUOTE', 'CODE', 'DIV']);
+    const allowed = new Set(['H3', 'P', 'UL', 'OL', 'LI', 'STRONG', 'EM', 'BR', 'IMG', 'TABLE', 'COLGROUP', 'COL', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'BLOCKQUOTE', 'CODE', 'DIV']);
     const walker = doc.createTreeWalker(wrapper, NodeFilter.SHOW_ELEMENT);
     const elements = [];
     while (walker.nextNode()) elements.push(walker.currentNode);
@@ -959,6 +960,22 @@
         return;
       }
       [...element.attributes].forEach((attribute) => {
+        if (element.tagName === 'IMG') {
+          // 正文图片只允许指向本机资源（assets://）或已解析的图片地址，避免注入外部脚本/追踪
+          if (attribute.name === 'src') {
+            const src = attribute.value.trim();
+            const ok = /^assets:\/\/[\w.-]+$/.test(src) || /^blob:/.test(src) || /^data:image\//i.test(src) || /^https?:\/\//i.test(src);
+            if (ok) element.setAttribute('src', src);
+            else element.removeAttribute('src');
+            return;
+          }
+          if (attribute.name === 'alt' || attribute.name === 'data-asset-id' || attribute.name === 'data-image-block') {
+            element.setAttribute(attribute.name, attribute.value);
+            return;
+          }
+          element.removeAttribute(attribute.name);
+          return;
+        }
         if (element.tagName === 'COL' && attribute.name === 'style') {
           const match = attribute.value.match(/width\s*:\s*([\d.]+)%/);
           if (match) element.setAttribute('style', `width:${match[1]}%`);
@@ -975,6 +992,19 @@
       });
     });
     return wrapper.innerHTML.trim();
+  }
+
+  // 编辑时显示的是 blob: 临时地址，写回笔记前换回 assets:// 引用，
+  // 否则刷新/导出后图片失效，还会把大体积 base64 塞进本地存储。
+  function contentForStorage(html) {
+    const doc = new DOMParser().parseFromString(`<div>${sanitizeHtml(html)}</div>`, 'text/html');
+    doc.querySelectorAll('img').forEach((img) => {
+      const assetId = img.getAttribute('data-asset-id');
+      const src = img.getAttribute('src') || '';
+      if (assetId) img.setAttribute('src', `assets://${assetId}`);
+      else if (!/^(?:https?:\/\/|data:image\/)/i.test(src)) img.remove();
+    });
+    return doc.body.firstElementChild?.innerHTML || '';
   }
 
   function stripHtml(html = '') {
@@ -1138,6 +1168,27 @@
     }
     lastRenderRoute = state.route;
     lastRenderNoteId = state.noteId;
+    void hydrateNoteAssets();
+  }
+
+  // 正文图片以 assets://<assetId> 存储，渲染后换成 blob 地址显示
+  async function hydrateNoteAssets() {
+    const rootNode = document.getElementById('view-root');
+    if (!rootNode) return;
+    const images = [...rootNode.querySelectorAll('img[src^="assets://"]')];
+    for (const img of images) {
+      const assetId = img.getAttribute('data-asset-id') || img.getAttribute('src').slice('assets://'.length);
+      const match = String(assetId).match(/^(.*)-(\d+)$/);
+      if (!match) continue;
+      try {
+        const asset = await getSourceImageAsset(match[1], Number(match[2]));
+        if (!asset?.data) continue;
+        img.src = URL.createObjectURL(new Blob([asset.data], { type: asset.type || 'image/png' }));
+        img.setAttribute('data-asset-id', assetId);
+      } catch (error) {
+        console.warn('正文图片读取失败：', error);
+      }
+    }
   }
 
   function aiEnhanceDropdown(compact = false) {
@@ -1292,20 +1343,26 @@
       <div class="workspace-editor-head">
         <div class="workspace-breadcrumb"><span class="workspace-status-dot"></span>${escapeHtml(note.folder || '未分类')}</div>
         <div class="workspace-editor-actions">
-          <button class="workspace-back" type="button" data-workspace-back title="返回上一页">← 返回</button>
-          <button class="workspace-list-toggle" type="button" data-workspace-list-toggle>笔记列表</button>
-          <div class="workspace-mode-switch" role="group" aria-label="编辑模式">
-            <button type="button" data-workspace-mode="rich" class="${state.workspaceMode === 'rich' ? 'active' : ''}">编辑</button>
-            <button type="button" data-workspace-mode="markdown" class="${state.workspaceMode === 'markdown' ? 'active' : ''}">Markdown</button>
+          <div class="workspace-action-row">
+            <button class="workspace-back" type="button" data-workspace-back title="返回上一页">← 返回</button>
+            <button class="workspace-list-toggle" type="button" data-workspace-list-toggle>笔记列表</button>
+            <div class="workspace-mode-switch" role="group" aria-label="编辑模式">
+              <button type="button" data-workspace-mode="rich" class="${state.workspaceMode === 'rich' ? 'active' : ''}">编辑</button>
+              <button type="button" data-workspace-mode="markdown" class="${state.workspaceMode === 'markdown' ? 'active' : ''}">Markdown</button>
+            </div>
+            <button class="btn small" type="button" data-mobile-import="gallery">＋ 图片 OCR</button>
+            <button class="btn secondary small" type="button" data-rerun-ocr="${escapeHtml(note.id)}" ${note.sourceImages?.length ? '' : 'disabled'}>重新 OCR</button>
+            ${aiEnhanceDropdown()}
           </div>
-          <button class="btn small" type="button" data-mobile-import="gallery">＋ 图片 OCR</button>
-          <button class="btn secondary small" type="button" data-rerun-ocr="${escapeHtml(note.id)}" ${note.sourceImages?.length ? '' : 'disabled'}>重新 OCR</button>
-          ${aiEnhanceDropdown()}
-          <button class="btn secondary small" type="button" data-paste-image>粘贴图片</button>
-          <button class="btn ghost small" type="button" id="workspace-undo" data-workspace-undo disabled title="撤销上一步编辑">↶ 撤销</button>
-          <button class="btn ghost small" type="button" id="workspace-redo" data-workspace-redo disabled title="重做">↷ 重做</button>
-          <button class="btn secondary small" type="button" data-export="${escapeHtml(note.id)}">导出</button>
-          <button class="btn danger small icon-only" type="button" data-delete-note="${escapeHtml(note.id)}" title="删除笔记">×</button>
+          <div class="workspace-action-row">
+            <button class="btn secondary small" type="button" data-paste-image>粘贴图片</button>
+            <button class="btn secondary small" type="button" data-export="${escapeHtml(note.id)}">导出</button>
+            <button class="btn danger small icon-only" type="button" data-delete-note="${escapeHtml(note.id)}" title="删除笔记">×</button>
+          </div>
+          <div class="workspace-action-row">
+            <button class="btn ghost small" type="button" id="workspace-undo" data-workspace-undo disabled title="撤销上一步编辑">↶ 撤销</button>
+            <button class="btn ghost small" type="button" id="workspace-redo" data-workspace-redo disabled title="重做">↷ 重做</button>
+          </div>
         </div>
       </div>
       <label class="workspace-image-dropzone" id="workspace-dropzone">
@@ -1333,7 +1390,11 @@
         ` : `
           <div class="workspace-content-shell">
             <div class="detail-content workspace-content" id="detail-content" contenteditable="true">${sanitizeHtml(note.contentHtml)}</div>
-            <button class="line-delete-btn" id="line-delete-btn" type="button" hidden>× 删除这一行</button>
+            <div class="block-actions" id="block-actions" hidden>
+              <button type="button" data-block-action="up" title="上移">↑</button>
+              <button type="button" data-block-action="down" title="下移">↓</button>
+              <button type="button" data-block-action="delete" title="删除这一行">×</button>
+            </div>
           </div>
           <div class="workspace-save-row">
             <span id="workspace-save-status" class="workspace-save-status">已自动保存</span>
@@ -1596,13 +1657,17 @@
         'Notes',
         '全部笔记',
         '置顶、按文件夹或标签筛选；支持搜索、多条合并和本地备份。',
-        `<div class="page-head-actions">
-          <button class="btn secondary" data-new-folder>＋ 新建文件夹</button>
-          <button class="btn secondary" data-route="history">版本历史</button>
-          <button class="btn secondary" data-export-backup>导出备份</button>
-          <label class="btn secondary backup-import-button">导入备份<input id="backup-file-input" type="file" accept=".json,application/json" /></label>
-          <button class="btn secondary" data-toggle-note-selection>${state.noteSelectionMode ? '退出合并' : '合并笔记'}</button>
-          <button class="btn" data-route="import">＋ 新建笔记</button>
+        `<div class="page-head-actions page-head-actions-rows">
+          <div class="page-head-row">
+            <button class="btn" data-route="import">＋ 新建笔记</button>
+            <button class="btn secondary" data-new-folder>＋ 新建文件夹</button>
+            <button class="btn secondary" data-route="history">版本历史</button>
+          </div>
+          <div class="page-head-row">
+            <button class="btn secondary" data-export-backup>导出备份</button>
+            <label class="btn secondary backup-import-button">导入备份<input id="backup-file-input" type="file" accept=".json,application/json" /></label>
+            <button class="btn secondary" data-toggle-note-selection>${state.noteSelectionMode ? '退出合并' : '合并笔记'}</button>
+          </div>
         </div>`
       )}
       <div class="toolbar">
@@ -2319,6 +2384,10 @@
                 <button class="text-link" type="button" data-new-folder-context="images">＋ 新建</button>
               </span>
             </label>
+            <label class="precise-table-toggle inline-image-toggle">
+              <input type="checkbox" id="images-inline-images" ${state.imageNoteInlineImages ? 'checked' : ''} />
+              <span>把截图放进正文（可上下移动、删除；关掉则只放在笔记的原图区）</span>
+            </label>
             <label class="generated-field">
               <span>正文（可留空）</span>
               <textarea id="images-note-body" class="paste-textarea compact" spellcheck="false" placeholder="不想写就留空，只保存截图。">${escapeHtml(state.imageNoteBody)}</textarea>
@@ -2359,9 +2428,16 @@
       fileEntries = files.map((entry) => entry.file).filter(Boolean);
     }
 
-    const contentHtml = bodyText ? blocksToHtml(structureOcrContent(bodyText)) : '';
+    const noteId = `note-${Date.now()}`;
+    let contentHtml = bodyText ? blocksToHtml(structureOcrContent(bodyText)) : '';
+    if (state.imageNoteInlineImages && fileEntries.length) {
+      contentHtml += fileEntries.map((file, index) => (
+        `<p data-image-block="1"><img src="assets://${noteId}-${index}" data-asset-id="${noteId}-${index}" alt="${escapeHtml(file.name || `截图 ${index + 1}`)}"></p>`
+      )).join('');
+    }
+    contentHtml = sanitizeHtml(contentHtml);
     const note = {
-      id: `note-${Date.now()}`,
+      id: noteId,
       title,
       folder,
       tags: rawTags.length ? [...new Set(rawTags)] : ['图片笔记'],
@@ -3038,6 +3114,11 @@
       });
     });
 
+    const inlineImagesToggle = document.getElementById('images-inline-images');
+    if (inlineImagesToggle) inlineImagesToggle.addEventListener('change', (event) => {
+      state.imageNoteInlineImages = event.target.checked;
+    });
+
     const saveImageNoteButton = document.getElementById('save-image-note');
     if (saveImageNoteButton) saveImageNoteButton.addEventListener('click', saveImageNote);
 
@@ -3202,13 +3283,15 @@
       lineDeleteShell.addEventListener('mousemove', positionLineDeleteButton);
       lineDeleteShell.addEventListener('mouseleave', hideLineDeleteButton);
     }
-    const lineDeleteButton = document.getElementById('line-delete-btn');
-    if (lineDeleteButton) {
-      lineDeleteButton.addEventListener('mousedown', (event) => event.preventDefault());
-      lineDeleteButton.addEventListener('click', (event) => {
+    const blockActionBar = document.getElementById('block-actions');
+    if (blockActionBar) {
+      blockActionBar.addEventListener('mousedown', (event) => event.preventDefault());
+      blockActionBar.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-block-action]');
+        if (!button) return;
         event.preventDefault();
         event.stopPropagation();
-        deleteWorkspaceBlock(lineDeleteTarget);
+        runBlockAction(button.dataset.blockAction);
       });
     }
 
@@ -6672,41 +6755,60 @@
   // 悬停到某一行时显示「删除这一行」，方便手动清理播放器字幕、界面对话框等噪声。
   let lineDeleteTarget = null;
 
-  function deleteWorkspaceBlock(node) {
-    const content = document.getElementById('detail-content');
-    if (!content || !node || node.parentElement !== content) return;
-    const before = content.innerHTML;
-    node.remove();
-    const after = content.innerHTML;
+  function commitWorkspaceEdit(before, content) {
     workspaceUndo.stack.push(before);
     if (workspaceUndo.stack.length > 60) workspaceUndo.stack.shift();
     workspaceUndo.redo.length = 0;
-    workspaceUndo.last = after;
+    workspaceUndo.last = content.innerHTML;
     syncWorkspaceUndoButtons();
     scheduleWorkspaceAutosave();
+  }
+
+  function runBlockAction(action) {
+    const content = document.getElementById('detail-content');
+    const node = lineDeleteTarget;
+    if (!content || !node || node.parentElement !== content) return;
+    const before = content.innerHTML;
+    if (action === 'delete') {
+      node.remove();
+      toast('已删除这一行，可用「↶ 撤销」恢复。', 'success');
+    } else if (action === 'up' || action === 'down') {
+      const sibling = action === 'up' ? node.previousElementSibling : node.nextElementSibling;
+      if (!sibling) {
+        toast(action === 'up' ? '已经在最上面了。' : '已经在最下面了。', 'error');
+        return;
+      }
+      if (action === 'up') content.insertBefore(node, sibling);
+      else content.insertBefore(sibling, node);
+      toast('已移动图片位置。', 'success');
+    }
+    commitWorkspaceEdit(before, content);
     hideLineDeleteButton();
-    toast('已删除这一行，可用「↶ 撤销」恢复。', 'success');
   }
 
   function hideLineDeleteButton() {
-    const button = document.getElementById('line-delete-btn');
-    if (button) button.hidden = true;
+    const bar = document.getElementById('block-actions');
+    if (bar) bar.hidden = true;
     lineDeleteTarget = null;
   }
 
   function positionLineDeleteButton(event) {
     const content = document.getElementById('detail-content');
-    const button = document.getElementById('line-delete-btn');
-    if (!content || !button || !content.contains(event.target)) return hideLineDeleteButton();
+    const bar = document.getElementById('block-actions');
+    if (!content || !bar || !content.contains(event.target)) return hideLineDeleteButton();
     let node = event.target;
     while (node && node.parentElement !== content) node = node.parentElement;
     if (!node || node.parentElement !== content) return hideLineDeleteButton();
-    const shell = button.parentElement;
+    const shell = bar.parentElement;
     const shellRect = shell.getBoundingClientRect();
     const nodeRect = node.getBoundingClientRect();
-    button.hidden = false;
-    button.style.top = `${Math.max(0, nodeRect.top - shellRect.top - 2)}px`;
-    button.style.right = '0px';
+    const isImageBlock = node.tagName === 'IMG' || Boolean(node.querySelector?.('img'));
+    bar.querySelectorAll('[data-block-action="up"], [data-block-action="down"]').forEach((button) => {
+      button.hidden = !isImageBlock;
+    });
+    bar.hidden = false;
+    bar.style.top = `${Math.max(0, nodeRect.top - shellRect.top - 2)}px`;
+    bar.style.right = '0px';
     lineDeleteTarget = node;
   }
 
@@ -6902,7 +7004,7 @@
     note.title = title;
     note.tags = tags.length ? [...new Set(tags)] : ['未分类'];
     note.folder = document.getElementById('detail-folder')?.value || note.folder || '未分类';
-    note.contentHtml = sanitizeHtml(content);
+    note.contentHtml = contentForStorage(content);
     note.summary = stripHtml(note.contentHtml).slice(0, 110);
     note.updatedAt = new Date().toISOString();
     persist({ reason: options.reason || '编辑笔记' });
@@ -7370,7 +7472,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.31',
+      version: '7.32',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -8655,7 +8757,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.31',
+      version: '7.32',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
