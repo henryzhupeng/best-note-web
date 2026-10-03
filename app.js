@@ -2752,7 +2752,7 @@
   }
 
   // ---- 笔记编辑撤销 / 重做 ----
-  const workspaceUndo = { noteId: null, stack: [], redo: [], last: '', timer: null };
+  const workspaceUndo = { noteId: null, stack: [], redo: [], last: '', timer: null, lastPushAt: 0 };
 
   function syncWorkspaceUndoButtons() {
     const canUndo = workspaceUndo.stack.length > 0;
@@ -2768,6 +2768,7 @@
     workspaceUndo.stack = [];
     workspaceUndo.redo = [];
     workspaceUndo.last = html ?? document.getElementById('detail-content')?.innerHTML ?? '';
+    workspaceUndo.lastPushAt = 0;
     if (workspaceUndo.timer) {
       clearTimeout(workspaceUndo.timer);
       workspaceUndo.timer = null;
@@ -2775,21 +2776,22 @@
     syncWorkspaceUndoButtons();
   }
 
+  // 每次输入都记录一次，但 900ms 内的连续输入合并成一步，
+  // 这样按钮状态是即时的（之前要等 600ms 才启用，用户会以为无效）。
   function scheduleWorkspaceUndoCapture() {
-    if (workspaceUndo.timer) return;
-    const before = workspaceUndo.last;
-    workspaceUndo.timer = setTimeout(() => {
-      workspaceUndo.timer = null;
-      const content = document.getElementById('detail-content');
-      if (!content) return;
-      const now = content.innerHTML;
-      if (now === before) return;
-      workspaceUndo.stack.push(before);
+    const content = document.getElementById('detail-content');
+    if (!content) return;
+    const now = content.innerHTML;
+    if (now === workspaceUndo.last) return;
+    const coalesce = workspaceUndo.stack.length && Date.now() - workspaceUndo.lastPushAt < 900;
+    if (!coalesce) {
+      workspaceUndo.stack.push(workspaceUndo.last);
       if (workspaceUndo.stack.length > 60) workspaceUndo.stack.shift();
-      workspaceUndo.redo.length = 0;
-      workspaceUndo.last = now;
-      syncWorkspaceUndoButtons();
-    }, 600);
+    }
+    workspaceUndo.lastPushAt = Date.now();
+    workspaceUndo.last = now;
+    workspaceUndo.redo.length = 0;
+    syncWorkspaceUndoButtons();
   }
 
   function applyWorkspaceUndo(direction) {
@@ -2804,6 +2806,7 @@
     content.innerHTML = target;
     workspaceUndo.last = target;
     workspaceUndo.timer = null;
+    workspaceUndo.lastPushAt = 0;
     syncWorkspaceUndoButtons();
     scheduleWorkspaceAutosave();
     const caret = content.querySelector('p, li, td, h3') || content;
@@ -3297,9 +3300,16 @@
 
     const detailContent = document.getElementById('detail-content');
     if (detailContent) {
-      if (workspaceUndo.noteId !== state.noteId) resetWorkspaceUndo(detailContent.innerHTML);
+      if (workspaceUndo.noteId !== state.noteId) {
+        resetWorkspaceUndo(detailContent.innerHTML);
+      } else if (detailContent.innerHTML !== workspaceUndo.last) {
+        // 页面重绘后把基线对齐到当前 DOM，避免撤销跳到不存在的旧结构
+        workspaceUndo.last = detailContent.innerHTML;
+      }
       detailContent.addEventListener('input', scheduleWorkspaceUndoCapture);
     }
+    // 按钮的 disabled 由脚本统一管理，每次绑定后都要刷新一次
+    syncWorkspaceUndoButtons();
     document.getElementById('detail-folder')?.addEventListener('change', scheduleWorkspaceAutosave);
 
     bindWorkspaceImageDropzone();
@@ -7472,7 +7482,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.32',
+      version: '7.33',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -8757,7 +8767,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.32',
+      version: '7.33',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),

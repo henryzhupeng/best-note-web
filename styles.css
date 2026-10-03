@@ -1680,7 +1680,9 @@ h1.page-title {
     bottom: 10px;
     left: 12px;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    /* 按按钮数量自动分列，避免新增导航项被挤到第二行 */
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     padding: 7px;
     border: 1px solid rgba(255, 255, 255, 0.5);
     border-radius: 20px;
