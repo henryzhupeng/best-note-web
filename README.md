@@ -1,4 +1,4 @@
-# 优记 BestNote · Web v7.22
+# 优记 BestNote · Web v7.23
 
 这是一个可直接在浏览器打开的高保真交互网页版，覆盖产品需求文档中的 MVP 核心路径：
 
@@ -51,14 +51,14 @@ ruby -run -e httpd . -p 4173
 
 然后打开 `http://localhost:4173`。
 
-> 页面本身不需要打包工具；首次 OCR 会从 jsDelivr 加载 Tesseract.js 引擎和语言模型。
+> 页面本身不需要打包工具；首次 OCR 会从 jsDelivr 加载 PaddleOCR-WASM 中文模型，并在浏览器中缓存。
 
 ## 当前限制
 
 这是用于产品验证和交互演示的前端原型：
 
-- 独立 OCR 已接入浏览器端 Tesseract.js，可读取图片真实文字
-- 首次 OCR 需要联网下载识别引擎和语言模型，后续会由浏览器缓存
+- 独立 OCR 默认使用浏览器端 PaddleOCR-WASM，可读取图片真实文字
+- 首次 OCR 需要联网下载 PaddleOCR-WASM 和中文模型，后续会由浏览器缓存
 - 标题生成使用本地领域评分规则，不调用外部大模型
 - 图形过滤基于 OCR 置信度、文字占比和区域类型，极复杂图片仍建议人工核对
 - 批量图片整理使用本地规则完成语义分块；接入大模型后可以进一步提升摘要和合并质量
@@ -66,80 +66,44 @@ ruby -run -e httpd . -p 4173
 - 笔记保存在当前浏览器的 IndexedDB，不会跨设备同步；可用 JSON 备份迁移
 - `.xls` 导出为 Excel 可直接打开的 HTML 表格，不是原生 XLSX
 
-## 接入真实服务
+## OCR 架构（v7.23）
 
-当前网页已经包含真实 OCR。若希望获得更高精度，或者希望批量 AI 整理也使用真实模型，可替换以下入口：
+优记的图片识别完全在浏览器本地完成，不经过任何服务器：
 
-- `runOcrRecognition()`：独立 OCR，默认使用浏览器端 Tesseract
-- `runAiOrganize()`：先对批量图片做真实 OCR，再通过 `buildGeneratedNote()` 生成内容
-- 如需更强语义合并，可将 `runAiOrganize()` 中得到的 OCR 文字上传到大模型服务
+- 默认引擎：PaddleOCR-WASM（`@paddlejs-models/ocr`），通过 jsDelivr 按需加载，首次使用下载中文模型并在浏览器缓存
+- 图片仅在用户浏览器内处理，不上传、不落盘到服务器
+- 识别失败、手写或模糊图片时，使用工具栏「AI 增强识别」下拉，跳转豆包 / Kimi / DeepSeek，用用户自己的账号额度手动识别后粘贴回来
+- 全程无后端、无 Token、无 iframe、不调用任何大模型 API
 
-建议真实云服务后端提供两个统一接口：
+关键入口：
 
-```text
-POST /api/ocr
-输入：多张图片
-输出：每张图片的文字、置信度、页面顺序（云 OCR 场景）
+- `runOcrRecognition()`：独立 OCR 页面
+- `runAiOrganize()` / `runPaddleJsAiOrganize()`：批量图片整理
+- `aiEnhanceDropdown()` / `copyAiOcrPrompt()`：AI 增强下拉与 prompt 复制
+- `AI_OCR_PROVIDERS`：第三方 AI 列表，新增服务只需改这一处 JSON
 
-POST /api/notes/organize
-输入：OCR 结果 + 模板类型
-输出：标题、摘要、结构化内容、标签建议
-```
+未来如需接入付费高精度 API 自动回填，可在 `runPaddleJsOcrRecognition()` 失败分支新增引擎，与当前免费方案共存，不影响现有路径。
 
-生产版本还应补充：账号与权限、云端同步、图片压缩、超时重试、文件类型白名单、接口限流和错误监控。
+## PaddleOCR-WASM 与 AI 增强兜底
 
-## PaddleOCR 高精度 OCR Skill
+- 本机已安装 `paddleocr-text-recognition` 与 `paddleocr-doc-parsing` 两个 Skill，可用于离线批量校验识别效果。
+- 网页默认使用 PaddleOCR-WASM 在浏览器本地识别，不上传图片、不调用云端 OCR API。
+- 识别效果较差、手写或模糊的图片，点击工具栏「AI 增强识别」，选择豆包 / Kimi / DeepSeek，新标签页打开对应服务并自动复制 prompt，识别结果手动粘贴回编辑器。
+- 模型加载失败时页面提示「模型加载失败，可使用 AI 增强识别兜底」，任何场景都不会清空编辑器已有内容。
 
-已在本机 Codex 中安装以下两个 Skill，下次会话可用：
+> 当前版本不依赖任何 PaddleOCR 云端凭证或后端 API。`server.rb` 是历史本地预览脚本，静态部署不需要它。
 
-- `paddleocr-text-recognition`
-  - 适合普通文字、CJK、小字号和截图文字识别。
-  - 返回文字、检测框和置信度。
-- `paddleocr-doc-parsing`
-  - 适合复杂版面、表格、公式、图表、多栏文档和阅读顺序恢复。
-  - 表格可以提供单元格级结构。
+## v7.23 重点更新
 
-网页保留浏览器端 Tesseract 作为本地和回退模式。高精度模式需要服务端 API，Token 不能安全地放进前端页面。
-
-如果后续启用高精度模式，建议采用下面的结构：
-
-```text
-浏览器
-  -> 本机/服务器后端 /api/ocr/high-precision
-  -> PaddleOCR OCR 或 layout-parsing API
-  -> 后端统一转换 Markdown / 表格 JSON
-  -> 返回网页
-```
-
-启动高精度模式：
-
-```bash
-cd /Users/pengzhu/Documents/Codex/2026-09-27/ni-k/outputs/best-note-web
-PADDLEOCR_DOC_PARSING_API_URL="$PADDLEOCR_DOC_PARSING_API_URL" \
-PADDLEOCR_ACCESS_TOKEN="$PADDLEOCR_ACCESS_TOKEN" \
-PORT=4175 ruby server.rb
-```
-然后打开 `http://localhost:4175`，在页面中选择“高精度 PaddleOCR”。
-
-需要安全配置的环境变量：
-
-```text
-PADDLEOCR_ACCESS_TOKEN
-PADDLEOCR_OCR_API_URL
-PADDLEOCR_DOC_PARSING_API_URL
-```
-
-不要把 Token 写进 `app.js`、网页 HTML、压缩包或 Git 仓库。
-
-如果暂时没有 PaddleOCR 凭证，可以直接使用“本地 Tesseract”模式，高精度模式失败后会自动回退到本地模式。
-
-PaddleOCR 文档解析适合优先应用的场景：
-
-- 复杂表格和单元格识别
-- 财务报表、发票和统计表
-- 多栏文档、长截图和扫描件
-- 公式、图表和版面阅读顺序恢复
-- 需要根据文字置信度标记低可信区域
+- 图片文字识别引擎更换为浏览器端 PaddleOCR-WASM，图片仅在本地处理，不上传服务器
+- 新增「AI 增强识别」下拉（豆包 / Kimi / DeepSeek），一键跳转并自动复制 prompt，无 Token 费用
+- 浏览器不支持 WebAssembly 时自动隐藏本地 OCR，仅保留 AI 增强入口
+- 模型或脚本加载失败时给出兜底提示，任何场景都不清空编辑器原有内容
+- 新增帮助弹窗，说明本地识别与隐私策略
+- 移除 Tesseract、云端 PaddleOCR 和所有后端 OCR 依赖
+- 新增独立诊断页 `ocr-ab-test.html`：同一张图对比「PaddleOCR-WASM」「PP-OCRv4 (ONNX)」「增强预处理」
+- 本地识别引擎可选：默认 PaddleOCR-WASM（体积小），可切换 PP-OCRv4 (ONNX，更准，首次约 15MB)，两者都在浏览器本地运行
+- 预留 `window.BestNoteAltOcr` 外部引擎插槽，A/B 页优先使用它
 
 ## v7.22 重点更新
 
@@ -168,9 +132,9 @@ BestNote 不和苹果备忘录比 OCR 精度。苹果便签擅长图片文字原
 
 ## 手机打开方式
 
-当前本地服务器默认监听 `0.0.0.0`，同一 Wi-Fi 下手机可以访问：
+当前只用一个静态服务器即可，同一 Wi-Fi 下手机可以访问：
 
-1. 在 Mac 上启动服务：`PORT=4175 ruby server.rb`
+1. 在 Mac 项目目录启动静态服务：`ruby -run -e httpd . -p 4175 -b 0.0.0.0`
 2. 查看 Mac 局域网 IP：系统设置 → 网络 → Wi-Fi → 详细信息
 3. 手机浏览器打开：`http://Mac的局域网IP:4175`
 4. 点击页面中的“安装到手机 / 桌面”，或使用浏览器“添加到主屏幕”
@@ -187,6 +151,42 @@ BestNote 不和苹果备忘录比 OCR 精度。苹果便签擅长图片文字原
 5. OCR 和批量 AI 保存前可以点文件夹旁的“新建”，直接创建并选中，不会丢失当前草稿。
 
 自定义文件夹会写入 IndexedDB，并包含在 JSON 备份中。
+
+## 本地识别引擎（两个都在浏览器本地跑）
+
+优记内置两个本地 OCR 引擎，在 OCR 页的「本地引擎」下拉里切换，选择会记住：
+
+| 引擎 | 特点 | 适用 |
+|---|---|---|
+| **PaddleOCR-WASM**（默认） | 走 Paddle.js，模型小、加载快 | 清晰截图、常规印刷体 |
+| **PP-OCRv4 (ONNX)** | 走 onnxruntime-web + PP-OCRv4 det/rec 模型，识别率更高 | 小字号、表格、稍糊的截图 |
+
+- 两者都**完全在浏览器本地运行**：模型从 CDN 下载一次后由浏览器缓存，图片不上传、无 Token、无 API
+- ONNX 引擎首次使用约需下载 15MB 模型，之后离线可用
+- 模型来源写死在 `ocr-onnx-engine.js` 顶部的 `DEFAULTS`，含多个 CDN 回退（HuggingFace / hf-mirror / jsDelivr）
+- 如果加载失败，页面会提示，可退回 PaddleOCR-WASM 或使用 AI 增强识别
+
+## OCR A/B 对比（诊断页）
+
+打开 `ocr-ab-test.html`（或从 OCR 页点击「A/B 对比」）：
+
+- **A 列**：用 PaddleOCR-WASM 直接识别原图
+- **B 列**：先做图像增强（灰度 + 对比度拉伸 + 2× 放大，或 Otsu 二值化）再识别
+- 两列并排显示文字、行数、字符数、质量分、耗时，并给出逐行差异与一致率
+- 可以判断「是图像质量拖累了识别」还是「模型本身不认」
+
+如果想接入第二个真正的引擎（例如 ONNX Runtime Web + PP-OCRv4/v5），只需在页面加载后注册：
+
+```js
+window.BestNoteAltOcr = {
+  // 返回纯文本即可
+  recognize: async ({ url, mode }) => {
+    return await myEngine.recognize(url);
+  }
+};
+```
+
+注册后 B 列会自动改用外部引擎，A 列仍是 PaddleOCR-WASM，两边互不影响。该页全程本地运行，不上传图片、不调用任何 API。
 
 ## 静态部署
 

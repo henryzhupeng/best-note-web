@@ -1,15 +1,19 @@
-const CACHE_NAME = 'best-note-v7.22';
+const CACHE_NAME = 'best-note-v7.23';
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=7.22',
-  './app.js?v=7.22',
+  './styles.css?v=7.23',
+  './app.js?v=7.23',
   './manifest.json',
   './icon.svg',
   './icon-192.png',
   './icon-512.png',
   './self-check.html',
-  './self-check.js'
+  './self-check.js',
+  './ocr-ab-test.html',
+  './ocr-ab-lib.js',
+  './ocr-onnx-lib.js',
+  './ocr-onnx-engine.js'
 ];
 
 const SHARE_DB_NAME = 'best-note-web-db';

@@ -16,6 +16,14 @@
   const MAX_FILES = 20;
   const OCR_EMPTY_CELL = '\uE000';
 
+  const AI_OCR_PROVIDERS = [
+    { name: '豆包', url: 'https://www.doubao.com/' },
+    { name: 'Kimi', url: 'https://kimi.moonshot.cn/' },
+    { name: 'DeepSeek', url: 'https://www.deepseek.com/' }
+  ];
+  const AI_OCR_PROMPT = '识别图片全部文字，修正错别字，输出干净 markdown 结构化笔记，表格输出 markdown 表格，不要多余开场白。';
+  const OCR_WASM_SUPPORTED = typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function';
+
   const icons = {
     general: '✦',
     study: '◇',
@@ -423,7 +431,10 @@
     aiKeepSources: true,
     ocrDraftHtml: '',
     ocrLang: 'chi_sim+eng',
-    ocrEngine: 'local',
+    ocrEngine: 'paddlejs',
+    ocrLocalEngine: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-local-engine') === 'onnx') ? 'onnx' : 'paddlejs',
+    ocrReturnNoteId: null,
+    workspaceCursorBlockIndex: null,
     ocrRenderMode: 'text',
     ocrFilterIrrelevant: true,
     ocrTextDirty: false,
@@ -1096,15 +1107,60 @@
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
 
+  function aiEnhanceDropdown(compact = false) {
+    return `
+      <details class="ai-enhance-dropdown ${compact ? 'compact' : ''}">
+        <summary>AI 增强识别 <span>⌄</span></summary>
+        <div class="ai-enhance-menu">
+          <p>本地识别较差、手写或模糊图片，可跳转第三方 AI 识图，需手动复制结果。</p>
+          ${AI_OCR_PROVIDERS.map((provider) => `<a href="${escapeHtml(provider.url)}" target="_blank" rel="noopener noreferrer" data-ai-provider="${escapeHtml(provider.name)}"><strong>${escapeHtml(provider.name)}</strong><small>使用你自己的账号额度</small></a>`).join('')}
+          <button type="button" data-ai-ocr-help>查看使用说明</button>
+        </div>
+      </details>
+    `;
+  }
+
+  function copyAiOcrPrompt() {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(AI_OCR_PROMPT).catch(() => {});
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = AI_OCR_PROMPT;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  }
+
+  function showAiOcrHelpModal() {
+    showModal(`
+      <div class="modal ai-help-modal">
+        <h2>本地识别与 AI 增强</h2>
+        <p>优记自带本地文字识别，图片仅在浏览器内处理，不上传服务器，保护隐私。手写、模糊图片可一键跳转豆包 / Kimi / DeepSeek 增强整理，结果手动粘贴回笔记。</p>
+        <div class="ai-help-flow">
+          <span>1. 本地 PaddleOCR-WASM 识别</span>
+          <span>2. 效果不好时打开 AI 增强</span>
+          <span>3. 上传图片并复制结果</span>
+          <span>4. 粘贴回优记继续编辑</span>
+        </div>
+        <p class="ai-help-note">不会嵌入第三方网页，也不会调用任何大模型 API 或产生 Token 费用。</p>
+        <div class="modal-actions"><button class="btn" data-close-modal>知道了</button></div>
+      </div>
+    `);
+  }
+
   function recognitionAdviceBanner() {
     return `
       <aside class="recognition-advice">
         <span class="recognition-advice-icon">i</span>
         <div class="recognition-advice-copy">
-          <strong>识别效果提示</strong>
-          <p>当前浏览器端文字识别模型更适合清晰、简单的截图。如果图片文字较小、表格复杂或识别错误较多，建议先用豆包、Kimi、ChatGPT 等 AI 识别，再通过“粘贴 AI 结果”完成结构化归档。</p>
+          <strong>PaddleOCR-WASM 本地识别</strong>
+          <p>图片仅在浏览器内处理，不上传服务器。识别较差、手写或模糊图片时，可跳转豆包 / Kimi / DeepSeek 增强整理，再手动粘贴结果。</p>
         </div>
-        <button class="btn secondary small" data-route="paste">粘贴 AI 结果</button>
+        ${aiEnhanceDropdown(true)}
       </aside>
     `;
   }
@@ -1209,6 +1265,7 @@
           </div>
           <button class="btn small" type="button" data-mobile-import="gallery">＋ 图片 OCR</button>
           <button class="btn secondary small" type="button" data-rerun-ocr="${escapeHtml(note.id)}" ${note.sourceImages?.length ? '' : 'disabled'}>重新 OCR</button>
+          ${aiEnhanceDropdown()}
           <button class="btn secondary small" type="button" data-paste-image>粘贴图片</button>
           <button class="btn secondary small" type="button" data-export="${escapeHtml(note.id)}">导出</button>
           <button class="btn danger small icon-only" type="button" data-delete-note="${escapeHtml(note.id)}" title="删除笔记">×</button>
@@ -1613,7 +1670,7 @@
     const files = state.importFiles;
     const result = state.aiResult;
     return `
-      ${pageHeader('Screenshot to Structure', '批量截图整理', '上传截图后先识别，再编辑标题、标签和正文，最后保存为表格或结构化笔记。', '<span class="status-badge ready">● 截图整理</span>')}
+      ${pageHeader('Screenshot to Structure', '批量截图整理', 'PaddleOCR-WASM 本地识别，图片不上传；再编辑标题、标签和正文。', `<div class="page-head-actions"><span class="status-badge ready">● ${localEngineLabel()}</span>${aiEnhanceDropdown()}</div>`)}
       ${recognitionAdviceBanner()}
       <div class="workspace-grid">
         <section class="panel">
@@ -1636,16 +1693,12 @@
 
             <div class="divider"></div>
 
-            <div class="ocr-settings ai-engine-settings">
-              <label for="ai-engine">
-                <span>识别引擎</span>
-                <select id="ai-engine" data-engine-select>
-                  <option value="local" ${state.ocrEngine === 'local' ? 'selected' : ''}>本地 Tesseract（免费离线）</option>
-                  <option value="paddlejs" ${state.ocrEngine === 'paddlejs' ? 'selected' : ''}>免费高精度 Paddle.js（浏览器端）</option>
-                  <option value="paddle" ${state.ocrEngine === 'paddle' ? 'selected' : ''}>云端 PaddleOCR（需服务端配置）</option>
-                </select>
-              </label>
-              <p>${state.ocrEngine === 'paddle' ? '高精度模式通过 server.rb 调用 PaddleOCR，适合复杂中文和表格。' : '本地模式不上传图片，识别速度取决于设备性能。'}</p>
+            <div class="ocr-settings ai-engine-settings wasm-engine-settings">
+              <div class="wasm-engine-card">
+                <span class="wasm-engine-icon">◉</span>
+                <div><strong>${localEngineLabel()}</strong><p>图片仅在浏览器本地处理，首次使用会下载并缓存中文模型。</p></div>
+              </div>
+              ${!OCR_WASM_SUPPORTED ? '<p class="ocr-wasm-warning">当前浏览器不支持 WebAssembly，本地 OCR 已隐藏，请使用 AI 增强识别。</p>' : ''}
             </div>
 
             <span class="form-label">02 选择整理模板</span>
@@ -1669,8 +1722,8 @@
             </div>
 
             <div class="action-row">
-              <span class="helper-note">ⓘ 本地模式不上传图片；高精度模式会通过本机 server.rb 转发到 PaddleOCR。</span>
-              <button class="btn" id="run-ai" ${state.busy || !files.length ? 'disabled' : ''}>${state.busy ? '正在整理…' : `开始整理${files.length ? ` · ${files.length} 张` : ''}`}</button>
+              <span class="helper-note">ⓘ ${localEngineLabel()} 在浏览器本地运行，不上传图片；识别失败可使用 AI 增强识别。</span>
+              <button class="btn" id="run-ai" ${state.busy || !files.length || !OCR_WASM_SUPPORTED ? 'disabled' : ''}>${state.busy ? '本地 AI 识别图片文字…' : `开始识别${files.length ? ` · ${files.length} 张` : ''}`}</button>
             </div>
           </div>
         </section>
@@ -1756,10 +1809,22 @@
     const files = state.ocrFiles;
     const meta = state.ocrMeta;
     const hasResult = Boolean(state.ocrText);
-    const engineLabel = state.ocrEngine === 'paddle' ? '高精度 PaddleOCR' : state.ocrEngine === 'paddlejs' ? '免费高精度 Paddle.js' : '本地 Tesseract';
+    const engineLabel = OCR_WASM_SUPPORTED ? `${localEngineLabel()} · 本地` : '本地 OCR 不可用';
     const suspiciousCount = countSuspiciousOcrCells(state.ocrBlocks);
+    if (!OCR_WASM_SUPPORTED) {
+      return `
+        ${pageHeader('Screenshot Organizer', '图片文字识别', '当前浏览器不支持 WebAssembly，本地 OCR 已隐藏。', `<div class="page-head-actions"><span class="status-badge warning">● 本地 OCR 不可用</span>${aiEnhanceDropdown()}</div>`)}
+        ${recognitionAdviceBanner()}
+        <div class="ocr-unavailable">
+          <span>!</span>
+          <h2>请使用 AI 增强识别</h2>
+          <p>当前浏览器不支持 WASM。可跳转豆包、Kimi 或 DeepSeek，用图片识别后手动复制结果。</p>
+          ${aiEnhanceDropdown()}
+        </div>
+      `;
+    }
     return `
-      ${pageHeader('Screenshot Organizer', '截图转结构化笔记', '识别后直接编辑标题、标签和正文，表格按需手动切换，确认无误再保存。', `<div class="page-head-actions"><span class="step">识别 → 编辑 → 保存</span><span class="status-badge ready">● ${engineLabel}</span><button class="btn secondary small" data-route="paste">粘贴 AI 结果</button></div>`)}
+      ${pageHeader('Screenshot Organizer', '截图智能整理', 'PaddleOCR-WASM 在浏览器本地识别，识别后可编辑、重排和保存。', `<div class="page-head-actions"><span class="step">本地识别 → 编辑 → 保存</span><span class="status-badge ready">● ${engineLabel}</span>${aiEnhanceDropdown()}<a class="btn secondary small" href="./ocr-ab-test.html" target="_blank" rel="noopener">A/B 对比</a><button class="btn secondary small" data-route="paste">粘贴 AI 结果</button></div>`)}
       ${recognitionAdviceBanner()}
       <div class="workspace-grid">
         <section class="panel">
@@ -1768,26 +1833,22 @@
             <span class="step">支持多选 · 最多 20 张</span>
           </div>
           <div class="panel-body">
-            <div class="ocr-settings">
-              <label for="ocr-language">
-                <span>识别语言</span>
-                <select id="ocr-language">
-                  <option value="chi_sim+eng" ${state.ocrLang === 'chi_sim+eng' ? 'selected' : ''}>简体中文 + 英文（推荐）</option>
-                  <option value="chi_sim" ${state.ocrLang === 'chi_sim' ? 'selected' : ''}>仅简体中文</option>
-                  <option value="eng" ${state.ocrLang === 'eng' ? 'selected' : ''}>仅英文 / 数字</option>
-                  <option value="chi_tra+eng" ${state.ocrLang === 'chi_tra+eng' ? 'selected' : ''}>繁体中文 + 英文</option>
-                </select>
-              </label>
-              <label for="ocr-engine">
-                <span>识别引擎</span>
-                <select id="ocr-engine" data-engine-select>
-                  <option value="local" ${state.ocrEngine === 'local' ? 'selected' : ''}>本地 Tesseract（免费离线）</option>
-                  <option value="paddlejs" ${state.ocrEngine === 'paddlejs' ? 'selected' : ''}>免费高精度 Paddle.js（浏览器端）</option>
-                  <option value="paddle" ${state.ocrEngine === 'paddle' ? 'selected' : ''}>云端 PaddleOCR（需服务端配置）</option>
-                </select>
-              </label>
+            <div class="ocr-settings wasm-engine-settings">
+              <div class="wasm-engine-card">
+                <span class="wasm-engine-icon">◉</span>
+                <div>
+                  <strong>${localEngineLabel()}</strong>
+                  <p>图片仅在浏览器本地处理，首次使用会下载并缓存中文模型。</p>
+                  <label class="local-engine-picker">本地引擎
+                    <select id="ocr-local-engine" ${state.busy ? 'disabled' : ''}>
+                      <option value="paddlejs" ${state.ocrLocalEngine === 'paddlejs' ? 'selected' : ''}>PaddleOCR-WASM（体积小，默认）</option>
+                      <option value="onnx" ${state.ocrLocalEngine === 'onnx' ? 'selected' : ''}>PP-OCRv4 (ONNX，更准，首次约 15MB)</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
               <div class="ocr-setting-copy">
-                <p>${state.ocrEngine === 'paddle' ? '高精度模式通过本地 server.rb 代理调用 PaddleOCR，Token 不会进入网页。' : '本地模式首次识别会自动下载语言模型，图片不会上传。'}</p>
+                <p>识别文字会插入当前编辑器光标附近，原图保留在笔记内。</p>
                 <button class="text-link" id="load-ocr-demo" type="button" ${state.busy ? 'disabled' : ''}>使用示例图片 →</button>
               </div>
             </div>
@@ -1841,8 +1902,8 @@
             </div>
 
             <div class="action-row">
-              <span class="helper-note">ⓘ 只保留可靠文字，图形、图标、线条和低置信度内容会被自动忽略。</span>
-              <button class="btn" id="run-ocr" ${state.busy || !files.length ? 'disabled' : ''}>${state.busy ? '正在识别…' : `开始识别${files.length ? ` · ${files.length} 张` : ''}`}</button>
+              <span class="helper-note">ⓘ 本地 AI 识别图片文字；手写、模糊图片可使用 AI 增强识别兜底。</span>
+              <button class="btn" id="run-ocr" ${state.busy || !files.length ? 'disabled' : ''}>${state.busy ? '本地 AI 识别图片文字…' : `开始识别${files.length ? ` · ${files.length} 张` : ''}`}</button>
             </div>
           </div>
         </section>
@@ -1850,14 +1911,14 @@
         <aside class="panel">
           <div class="panel-header">
             <h2>识别结果 · 可编辑</h2>
-            <span class="result-count" id="ocr-result-count">${meta ? `${meta.images} 张 · ${meta.engine === 'PaddleOCR' || meta.engine === 'Paddle.js' ? `${meta.engine} 高精度` : `平均置信度 ${meta.confidence}%`}` : hasResult ? `${state.ocrText.length} 字符` : '暂无结果'}</span>
+            <span class="result-count" id="ocr-result-count">${meta ? `${meta.images} 张 · ${isLocalEngine(meta.engine) ? `${meta.engine} 本地` : `平均置信度 ${meta.confidence}%`}` : hasResult ? `${state.ocrText.length} 字符` : '暂无结果'}</span>
           </div>
           <div class="panel-body ocr-result-box">
             ${hasResult ? `
               ${meta ? `
                 <div class="ocr-summary">
                   <span><strong>${meta.images}</strong> 张图片</span>
-                  <span><strong>${meta.engine === 'PaddleOCR' || meta.engine === 'Paddle.js' ? '高精度' : `${meta.confidence}%`}</strong> ${meta.engine === 'PaddleOCR' || meta.engine === 'Paddle.js' ? meta.engine : '平均置信度'}</span>
+                  <span><strong>${isLocalEngine(meta.engine) ? '本地' : `${meta.confidence}%`}</strong> ${isLocalEngine(meta.engine) ? meta.engine : '平均置信度'}</span>
                   <span><strong>${meta.ignoredGraphics || 0}</strong> 忽略图形/噪声行</span>
                   ${meta.tableMeta ? `
                     <span><strong>${meta.tableMeta.rows}×${meta.tableMeta.columns}</strong> 表格行列</span>
@@ -2315,6 +2376,8 @@
       image.name || `${note.title}-${index + 1}.png`,
       { type: image.type || 'image/png' }
     ));
+    state.ocrReturnNoteId = noteId;
+    state.workspaceCursorBlockIndex = null;
     navigate('ocr');
     addFiles(files, 'ocr');
     toast(`已载入 ${files.length} 张原始截图，可以重新识别。`, 'success');
@@ -2327,6 +2390,7 @@
     const acceptFiles = (fileList) => {
       const files = [...(fileList || [])].filter((file) => file.type.startsWith('image/'));
       if (!files.length) return;
+      captureWorkspaceImportContext();
       navigate('ocr');
       addFiles(files, 'ocr');
       toast(`已加入 ${files.length} 张图片，正在进入 OCR。`, 'success');
@@ -2521,16 +2585,6 @@
     const clearOcrButton = document.getElementById('clear-ocr-files');
     if (clearOcrButton) clearOcrButton.addEventListener('click', clearOcrFiles);
 
-    document.querySelectorAll('[data-engine-select]').forEach((select) => {
-      select.addEventListener('change', (event) => {
-        state.ocrEngine = event.target.value;
-        render();
-        if (state.ocrEngine === 'paddle') {
-          toast('已切换到高精度模式，请确认本地 server.rb 与 PaddleOCR 环境变量已配置。', 'success');
-        }
-      });
-    });
-
     const ocrLanguage = document.getElementById('ocr-language');
     if (ocrLanguage) ocrLanguage.addEventListener('change', (event) => {
       state.ocrLang = event.target.value;
@@ -2628,6 +2682,13 @@
 
     const runOcr = document.getElementById('run-ocr');
     if (runOcr) runOcr.addEventListener('click', runOcrRecognition);
+
+    const localEngineSelect = document.getElementById('ocr-local-engine');
+    if (localEngineSelect) localEngineSelect.addEventListener('change', (event) => {
+      setLocalEngine(event.target.value);
+      render();
+      toast(`本地识别引擎已切换为 ${localEngineLabel()}。`, 'success');
+    });
 
     const saveAi = document.getElementById('save-ai-result');
     if (saveAi) saveAi.addEventListener('click', saveAiResult);
@@ -2854,9 +2915,54 @@
     render();
   }
 
+  function captureWorkspaceImportContext() {
+    if (state.route !== 'workspace') {
+      state.ocrReturnNoteId = null;
+      state.workspaceCursorBlockIndex = null;
+      return;
+    }
+    state.ocrReturnNoteId = state.noteId;
+    state.workspaceCursorBlockIndex = null;
+    const content = document.getElementById('detail-content');
+    const selection = window.getSelection?.();
+    if (!content || !selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!content.contains(range.startContainer)) return;
+    let block = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    block = block?.closest('h3,p,li,table,div[data-section-id]');
+    if (block && !content.contains(block)) block = null;
+    let topLevel = block;
+    while (topLevel && topLevel.parentElement !== content) topLevel = topLevel.parentElement;
+    const blocks = [...content.children];
+    const index = topLevel ? blocks.indexOf(topLevel) : -1;
+    state.workspaceCursorBlockIndex = index >= 0 ? index : null;
+  }
+
+  function insertOcrResultIntoNote(noteId, text, files) {
+    const note = getNoteById(noteId);
+    if (!note || !text?.trim()) return false;
+    const source = `<div data-section-id="ocr-${Date.now()}"><h3>${escapeHtml(state.ocrTitle || '图片文字')}</h3>${blocksToHtml(state.ocrBlocks)}</div>`;
+    const documentNode = new DOMParser().parseFromString(`<div>${sanitizeHtml(note.contentHtml)}</div>`, 'text/html');
+    const wrapper = documentNode.body.firstElementChild;
+    const holder = document.createElement('div');
+    holder.innerHTML = source;
+    const inserted = holder.firstElementChild;
+    const children = [...wrapper.children];
+    const index = Number.isInteger(state.workspaceCursorBlockIndex) ? Math.min(state.workspaceCursorBlockIndex, children.length - 1) : -1;
+    if (inserted && index >= 0 && children[index]) children[index].after(inserted);
+    else if (inserted) wrapper.appendChild(inserted);
+    note.contentHtml = sanitizeHtml(wrapper.innerHTML);
+    note.summary = stripHtml(note.contentHtml).slice(0, 110);
+    note.updatedAt = new Date().toISOString();
+    if (state.ocrKeepSources && files.length) attachSourceImagesInBackground(note, files);
+    persist({ reason: '插入本地 OCR 文字' });
+    return true;
+  }
+
   function startMobileImport(mode) {
     const input = document.getElementById(mode === 'camera' ? 'mobile-camera-input' : 'mobile-gallery-input');
     if (!input) return;
+    captureWorkspaceImportContext();
     navigate('ocr');
     setTimeout(() => input.click(), 0);
   }
@@ -2879,6 +2985,7 @@
         toast('剪贴板里没有图片。', 'error');
         return;
       }
+      captureWorkspaceImportContext();
       navigate('ocr');
       addFiles(files, 'ocr');
       toast(`已从剪贴板加入 ${files.length} 张截图。`, 'success');
@@ -2978,99 +3085,12 @@
       toast('请先上传至少一张截图。', 'error');
       return;
     }
-
+    if (!OCR_WASM_SUPPORTED) {
+      toast('当前浏览器不支持 WASM，请使用 AI 增强识别。', 'error');
+      return;
+    }
     const files = state.importFiles.map((file) => ({ ...file }));
-    if (state.ocrEngine === 'paddlejs') {
-      return runPaddleJsAiOrganize(files);
-    }
-    if (state.ocrEngine === 'paddle') {
-      return runPaddleAiOrganize(files);
-    }
-    const totalSteps = 4;
-    let worker = null;
-    state.busy = true;
-    state.aiResult = null;
-    render();
-    setProgress('ai', 0, totalSteps);
-
-    try {
-      const Tesseract = await loadTesseractEngine();
-      setProgress('ai', 1, totalSteps);
-
-      worker = await Tesseract.createWorker(state.ocrLang, 1, {
-        logger: (message) => {
-          const label = translateOcrStatus(message.status);
-          const progress = Number.isFinite(message.progress) ? Math.round(message.progress * 100) : 0;
-          const progressLabel = document.getElementById('ai-progress-label');
-          if (progressLabel) progressLabel.textContent = `${label}${progress ? ` · ${progress}%` : '…'}`;
-        },
-        errorHandler: (error) => console.warn('AI OCR worker error:', error)
-      });
-      await worker.setParameters({ preserve_interword_spaces: '1', user_defined_dpi: '300' });
-
-      const results = [];
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        const progressLabel = document.getElementById('ai-progress-label');
-        if (progressLabel) progressLabel.textContent = `识别第 ${index + 1}/${files.length} 张：${file.name}`;
-        const processedImage = await preprocessImageForOcr(file.url);
-        let extraction = null;
-        if (processedImage.tableCells?.length >= 4) {
-          extraction = await recognizeOcrTableCells(worker, processedImage.tableCells);
-        }
-        if (!extraction?.text) {
-          await worker.setParameters({
-            preserve_interword_spaces: '1',
-            tessedit_pageseg_mode: '3'
-          });
-          const result = await worker.recognize(processedImage.dataUrl);
-          extraction = extractReliableOcrText(result);
-        } else {
-          await worker.setParameters({ preserve_interword_spaces: '1' });
-        }
-        results.push({
-          id: file.id,
-          name: file.name,
-          text: extraction.text,
-          confidence: extraction.confidence,
-          ignoredLines: extraction.ignoredLines,
-          tableMeta: extraction.tableMeta || null
-        });
-        const value = Math.round(35 + ((index + 1) / files.length) * 55);
-        const bar = document.getElementById('ai-progress-bar');
-        const percent = document.getElementById('ai-progress-percent');
-        if (bar) bar.style.width = `${value}%`;
-        if (percent) percent.textContent = `${value}%`;
-      }
-
-      setProgress('ai', 2, totalSteps);
-      const text = results.filter((item) => item.text).map((item) => item.text).join('\n\n');
-      if (!text.trim()) {
-        throw new Error('未检测到可靠文字，请确认截图清晰度或更换图片。');
-      }
-
-      const result = buildGeneratedNote(state.importTemplate, files, text);
-      state.aiResult = result;
-      state.stats.aiRuns += 1;
-      persist();
-      setProgress('ai', 3, totalSteps);
-      state.busy = false;
-      render();
-      toast('已根据截图真实内容完成整理。', 'success');
-    } catch (error) {
-      console.error('AI organize failed:', error);
-      state.busy = false;
-      render();
-      toast(error?.message || '图片整理失败，请稍后重试。', 'error');
-    } finally {
-      if (worker) {
-        try {
-          await worker.terminate();
-        } catch (error) {
-          console.warn('AI OCR worker cleanup failed:', error);
-        }
-      }
-    }
+    return runPaddleJsAiOrganize(files);
   }
 
   function getOcrBlockText(block) {
@@ -3325,48 +3345,66 @@
     toast('编辑结果已保存为笔记。', 'success');
   }
 
-  const TESSERACT_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
-  let tesseractLoader = null;
+  const LOCAL_ENGINE_NAMES = ['PaddleOCR-WASM', 'PP-OCRv4 (ONNX)'];
+  function isLocalEngine(name) {
+    return LOCAL_ENGINE_NAMES.includes(name);
+  }
+  function localEngineLabel() {
+    return state.ocrLocalEngine === 'onnx' ? 'PP-OCRv4 (ONNX)' : 'PaddleOCR-WASM';
+  }
+  function setLocalEngine(value) {
+    state.ocrLocalEngine = value === 'onnx' ? 'onnx' : 'paddlejs';
+    try { localStorage.setItem('bestnote-local-engine', state.ocrLocalEngine); } catch (error) { /* ignore */ }
+  }
 
-  function loadTesseractEngine() {
-    if (window.Tesseract?.createWorker) return Promise.resolve(window.Tesseract);
-    if (tesseractLoader) return tesseractLoader;
-
-    tesseractLoader = new Promise((resolve, reject) => {
-      const onLoad = () => {
-        if (window.Tesseract?.createWorker) resolve(window.Tesseract);
-        else reject(new Error('OCR 引擎初始化失败。'));
-      };
-      const onError = () => {
-        tesseractLoader = null;
-        reject(new Error('OCR 引擎下载失败，请检查网络连接。'));
-      };
-      const existing = document.querySelector('script[data-tesseract-engine]');
+  let onnxOcrLoader = null;
+  function loadExternalScript(src, flag) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[data-bn-script="${flag}"]`);
       if (existing) {
-        existing.addEventListener('load', onLoad, { once: true });
-        existing.addEventListener('error', () => {
-          existing.remove();
-          onError();
-        }, { once: true });
-        if (existing.dataset.loaded === 'true') onLoad();
+        if (existing.dataset.loaded === 'true') return resolve();
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => reject(new Error(`脚本加载失败：${src}`)), { once: true });
         return;
       }
       const script = document.createElement('script');
-      script.src = TESSERACT_SCRIPT_URL;
+      script.src = src;
       script.async = true;
-      script.dataset.tesseractEngine = 'true';
-      script.addEventListener('load', () => {
-        script.dataset.loaded = 'true';
-        onLoad();
-      }, { once: true });
-      script.addEventListener('error', () => {
-        script.remove();
-        onError();
-      }, { once: true });
+      script.dataset.bnScript = flag;
+      script.addEventListener('load', () => { script.dataset.loaded = 'true'; resolve(); }, { once: true });
+      script.addEventListener('error', () => reject(new Error(`脚本加载失败：${src}`)), { once: true });
       document.head.appendChild(script);
     });
+  }
 
-    return tesseractLoader;
+  function loadOnnxOcrEngine() {
+    if (window.BestNoteOnnxOcr?.recognize) return Promise.resolve(window.BestNoteOnnxOcr);
+    if (onnxOcrLoader) return onnxOcrLoader;
+    onnxOcrLoader = (async () => {
+      await loadExternalScript('./ocr-onnx-lib.js', 'onnx-lib');
+      await loadExternalScript('./ocr-onnx-engine.js', 'onnx-engine');
+      if (!window.BestNoteOnnxOcr?.recognize) throw new Error('PP-OCRv4 (ONNX) 初始化失败');
+      return window.BestNoteOnnxOcr;
+    })().catch((error) => {
+      onnxOcrLoader = null;
+      throw error;
+    });
+    return onnxOcrLoader;
+  }
+
+  async function loadLocalOcrEngine() {
+    if (state.ocrLocalEngine === 'onnx') return loadOnnxOcrEngine();
+    return loadPaddleJsOcrEngine();
+  }
+
+  async function recognizeWithLocalEngine(input) {
+    if (state.ocrLocalEngine === 'onnx') {
+      const engine = await loadOnnxOcrEngine();
+      const image = typeof input === 'string' ? await imageFromDataUrl(input) : input;
+      const result = await engine.recognize(image);
+      return normalizeOcrText(result?.text || '');
+    }
+    return recognizePaddleJsImage(input);
   }
 
   const PADDLEJS_OCR_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/@paddlejs-models/ocr@1.2.4/lib/index.js';
@@ -3381,7 +3419,7 @@
       const onLoad = async () => {
         try {
           const engine = window.paddlejs?.ocr;
-          if (!engine?.recognize) throw new Error('Paddle.js OCR 引擎初始化失败。');
+          if (!engine?.recognize) throw new Error('PaddleOCR-WASM 初始化失败。');
           await engine.init();
           resolve(engine);
         } catch (error) {
@@ -3394,7 +3432,7 @@
         existing.addEventListener('error', () => {
           existing.remove();
           paddleJsOcrLoader = null;
-          reject(new Error('Paddle.js OCR 脚本加载失败。'));
+          reject(new Error('PaddleOCR-WASM 脚本加载失败。'));
         }, { once: true });
         if (existing.dataset.loaded === 'true') onLoad();
         return;
@@ -3410,7 +3448,7 @@
       script.addEventListener('error', () => {
         script.remove();
         paddleJsOcrLoader = null;
-        reject(new Error('Paddle.js OCR 脚本加载失败，请检查网络。'));
+        reject(new Error('PaddleOCR-WASM 脚本加载失败，请检查网络。'));
       }, { once: true });
       document.head.appendChild(script);
     });
@@ -3421,7 +3459,7 @@
     return new Promise((resolve, reject) => {
       const image = new Image();
       image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error('Paddle.js 图片读取失败。'));
+      image.onerror = () => reject(new Error('PaddleOCR-WASM 图片读取失败。'));
       image.src = dataUrl;
     });
   }
@@ -3444,17 +3482,17 @@
     for (const cell of tableCells) {
       let text = '';
       try {
-        text = await recognizePaddleJsImage(cell.dataUrl);
+        text = await recognizeWithLocalEngine(cell.dataUrl);
       } catch (error) {
-        console.warn('Paddle.js cell recognition failed:', error);
+        console.warn('PaddleOCR-WASM cell recognition failed:', error);
       }
       text = cleanOcrPunctuationLine(String(text || '').replace(/\s+/g, ' ')).trim();
       if (!text && cell.contrastDataUrl) {
         try {
-          text = await recognizePaddleJsImage(cell.contrastDataUrl);
+          text = await recognizeWithLocalEngine(cell.contrastDataUrl);
           text = cleanOcrPunctuationLine(String(text || '').replace(/\s+/g, ' ')).trim();
         } catch (error) {
-          console.warn('Paddle.js contrast cell recognition failed:', error);
+          console.warn('PaddleOCR-WASM contrast cell recognition failed:', error);
         }
       }
       matrix[cell.row][cell.column] = text;
@@ -3473,24 +3511,21 @@
         columns: columnCount,
         passes: 2,
         lowConfidenceCells,
-        engine: 'Paddle.js'
+        engine: 'PaddleOCR-WASM'
       }
     };
   }
 
   async function recognizeFilesWithPaddleJs(files, onProgress) {
-    await loadPaddleJsOcrEngine();
+    await loadLocalOcrEngine();
     const results = [];
     const blocks = [];
     let titleText = '';
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       if (typeof onProgress === 'function') onProgress(index, file);
-      if (file.isSample) {
-        throw new Error('示例图片不是表格，已自动切换到本地 Tesseract。');
-      }
       const processedImage = await preprocessImageForOcr(file.url);
-      const fullImageText = await recognizePaddleJsImage(processedImage.rawDataUrl || processedImage.titleDataUrl || processedImage.dataUrl);
+      const fullImageText = await recognizeWithLocalEngine(processedImage.rawDataUrl || processedImage.titleDataUrl || processedImage.dataUrl);
       if (index === 0) titleText = fullImageText;
 
       const fastTable = parsePaddleJsTableText(fullImageText);
@@ -3508,16 +3543,23 @@
             columns: 2,
             passes: 1,
             lowConfidenceCells: 0,
-            engine: 'Paddle.js'
+            engine: 'PaddleOCR-WASM'
           }
         };
       } else if (processedImage.tableCells?.length >= 4) {
         extraction = await recognizePaddleJsTableCells(processedImage.tableCells);
       } else {
-        throw new Error('当前图片不是表格，已自动切换到本地 Tesseract。');
+        resultBlocks = structureOcrContent(fullImageText);
+        extraction = {
+          text: fullImageText,
+          confidence: null,
+          ignoredLines: 0,
+          keptLines: fullImageText.split('\n').filter(Boolean).length,
+          tableMeta: null
+        };
       }
       if (!extraction?.text) {
-        throw new Error('Paddle.js 未识别出可靠表格，已自动切换到本地 Tesseract。');
+        throw new Error('PaddleOCR-WASM 未识别出可靠文字。');
       }
       const result = {
         id: file.id,
@@ -3554,17 +3596,6 @@
       step.classList.toggle('done', done);
       step.classList.toggle('current', current);
     });
-  }
-
-  function translateOcrStatus(status = '') {
-    const labels = {
-      'loading tesseract core': '加载识别内核',
-      'initializing tesseract': '初始化识别引擎',
-      'loading language traineddata': '下载语言模型',
-      'initializing api': '准备识别环境',
-      'recognizing text': '识别文字'
-    };
-    return labels[status] || '处理中';
   }
 
   function updateOcrFileStatus(fileId, text, status = 'pending') {
@@ -4967,35 +4998,6 @@
     }).filter(Boolean).join('\n\n');
   }
 
-  async function callPaddleOcrApi(fileItem) {
-    let uploadFile = fileItem?.file;
-    if (!uploadFile && fileItem?.url) {
-      const blob = await fetch(fileItem.url).then((response) => response.blob());
-      uploadFile = new File([blob], fileItem.name || 'image.png', { type: blob.type || 'image/png' });
-    }
-    if (!uploadFile) throw new Error('无法读取当前图片文件。');
-    if (location.protocol === 'file:') {
-      throw new Error('高精度模式需要通过 http://localhost 打开，不能使用 file://。');
-    }
-
-    const form = new FormData();
-    form.append('file', uploadFile, uploadFile.name || fileItem.name || 'image.png');
-    const response = await fetch('/api/ocr/high-precision', {
-      method: 'POST',
-      body: form
-    });
-    let payload;
-    try {
-      payload = await response.json();
-    } catch (error) {
-      throw new Error('高精度 OCR 服务返回了无效响应。');
-    }
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload?.error?.message || `高精度 OCR 请求失败（${response.status}）。`);
-    }
-    return payload;
-  }
-
   function sanitizeOcrTextSegment(value) {
     return String(value || '')
       .replace(/[|｜丨]/g, ' ')
@@ -5619,7 +5621,7 @@
     return generateOcrTitleSuggestions(text)[0]?.title || 'OCR 识别结果整理';
   }
 
-  function getTableMetaFromOcrBlocks(blocks, engine = 'PaddleOCR') {
+  function getTableMetaFromOcrBlocks(blocks, engine = 'PaddleOCR-WASM') {
     const table = (blocks || []).find((block) => block.type === 'table');
     if (!table) return null;
     return {
@@ -5644,17 +5646,17 @@
     state.ocrMeta = null;
     state.ocrError = '';
     render();
-    setOcrProgress(4, '加载免费 Paddle.js OCR 模型…', 0);
+    setOcrProgress(4, '本地 AI 识别图片文字…', 0);
 
     try {
       const batch = await recognizeFilesWithPaddleJs(files, (index, file) => {
         for (let previous = 0; previous < index; previous += 1) {
           updateOcrFileStatus(files[previous].id, '完成', 'done');
         }
-        updateOcrFileStatus(file.id, 'Paddle.js 识别中…', 'active');
-        setOcrProgress(12 + (index / files.length) * 76, `Paddle.js 识别 ${index + 1}/${files.length}`, 1);
+        updateOcrFileStatus(file.id, '本地 AI 识别图片文字…', 'active');
+        setOcrProgress(12 + (index / files.length) * 76, `本地 AI 识别 ${index + 1}/${files.length}`, 1);
       });
-      batch.results.forEach((result) => updateOcrFileStatus(result.id, '完成 · Paddle.js', 'done'));
+      batch.results.forEach((result) => updateOcrFileStatus(result.id, '完成 · PaddleOCR-WASM', 'done'));
 
       state.ocrResults = batch.results;
       state.ocrText = correctOcrDomainText(batch.text);
@@ -5664,28 +5666,46 @@
       state.ocrMeta = {
         images: files.length,
         confidence: null,
-        engine: 'Paddle.js',
+        engine: localEngineLabel(),
         elapsedMs: performance.now() - startedAt,
         ignoredGraphics: 0,
         tableMeta: batch.results.find((result) => result.tableMeta)?.tableMeta || null,
         chars: batch.text.length
       };
       state.ocrTitleSuggestions = generateOcrTitleSuggestions(filterOcrContentLines(batch.titleText || batch.text));
-      state.ocrTitle = state.ocrTitleSuggestions[0]?.title || 'Paddle.js 识别结果';
+      state.ocrTitle = state.ocrTitleSuggestions[0]?.title || '本地 AI 识别结果';
       state.ocrError = '';
       state.stats.ocrRuns += 1;
+      const returnNoteId = state.ocrReturnNoteId;
+      if (returnNoteId && insertOcrResultIntoNote(returnNoteId, state.ocrText, files)) {
+        state.ocrText = '';
+        state.ocrTitle = '';
+        state.ocrTitleSuggestions = [];
+        state.ocrTags = [];
+        state.ocrDraftHtml = '';
+        state.ocrMeta = null;
+        state.ocrResults = [];
+        state.ocrBlocks = [];
+        state.ocrReturnNoteId = null;
+        state.workspaceCursorBlockIndex = null;
+        clearFiles('ocr');
+        state.busy = false;
+        navigate('workspace', { noteId: returnNoteId });
+        toast('识别文字和原图已插入当前笔记。', 'success');
+        return;
+      }
       persist();
-      setOcrProgress(100, 'Paddle.js 识别完成', 2);
+      setOcrProgress(100, '本地 AI 识别完成', 2);
       state.busy = false;
       render();
-      toast('免费高精度 Paddle.js 识别完成。', 'success');
+      toast(`${localEngineLabel()} 本地识别完成。`, 'success');
     } catch (error) {
-      console.error('Paddle.js OCR failed:', error);
+      console.error('PaddleOCR-WASM failed:', error);
       state.busy = false;
-      state.ocrEngine = 'local';
+      state.ocrError = `${localEngineLabel()} 模型加载或识别失败：${error.message}`;
       render();
-      toast(`Paddle.js 不可用，已回退到本地 Tesseract：${error.message}`, 'error');
-      return runOcrRecognition();
+      toast('模型加载失败，可使用 AI 增强识别兜底。', 'error');
+      return;
     }
   }
 
@@ -5699,7 +5719,7 @@
     try {
       const batch = await recognizeFilesWithPaddleJs(files, (index, file) => {
         const label = document.getElementById('ai-progress-label');
-        if (label) label.textContent = `Paddle.js 识别第 ${index + 1}/${files.length} 张：${file.name}`;
+        if (label) label.textContent = `本地 AI 识别图片文字 · 第 ${index + 1}/${files.length} 张：${file.name}`;
         const value = Math.round(18 + (index / files.length) * 62);
         const bar = document.getElementById('ai-progress-bar');
         const percent = document.getElementById('ai-progress-percent');
@@ -5712,131 +5732,13 @@
       persist();
       state.busy = false;
       render();
-      toast(`Paddle.js 免费高精度整理完成，用时 ${((performance.now() - startedAt) / 1000).toFixed(1)} 秒。`, 'success');
+      toast(`PaddleOCR-WASM 本地整理完成，用时 ${((performance.now() - startedAt) / 1000).toFixed(1)} 秒。`, 'success');
     } catch (error) {
-      console.error('Paddle.js AI organize failed:', error);
-      state.busy = false;
-      state.ocrEngine = 'local';
-      render();
-      toast(`Paddle.js 不可用，已回退到本地 Tesseract：${error.message}`, 'error');
-      return runAiOrganize();
-    }
-  }
-
-  async function runPaddleOcrRecognition(files) {
-    const startedAt = performance.now();
-    state.busy = true;
-    state.ocrText = '';
-    state.ocrTitle = '';
-    state.ocrTitleSuggestions = [];
-    state.ocrTags = [];
-    state.ocrDraftHtml = '';
-    state.ocrBlocks = [];
-    state.ocrResults = [];
-    state.ocrMeta = null;
-    state.ocrError = '';
-    render();
-    setOcrProgress(5, '连接高精度 OCR 服务…', 0);
-
-    try {
-      const results = [];
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        updateOcrFileStatus(file.id, 'PaddleOCR 识别中…', 'active');
-        const data = await callPaddleOcrApi(file);
-        const markdown = data.markdown || data.text || '';
-        const blocks = parseMarkdownToOcrBlocks(markdown);
-        const text = ocrBlocksToPlainText(blocks) || data.text || markdown;
-        results.push({
-          id: file.id,
-          name: file.name,
-          text,
-          markdown,
-          confidence: null,
-          tableMeta: getTableMetaFromOcrBlocks(blocks),
-          error: ''
-        });
-        updateOcrFileStatus(file.id, '完成 · PaddleOCR', 'done');
-        setOcrProgress(18 + ((index + 1) / files.length) * 74, `高精度识别 ${index + 1}/${files.length}`, 1);
-      }
-
-      const combinedMarkdown = results.map((result) => result.markdown || result.text).join('\n\n');
-      const combinedBlocks = parseMarkdownToOcrBlocks(combinedMarkdown);
-      const combinedText = ocrBlocksToPlainText(combinedBlocks) || results.map((result) => result.text).join('\n\n');
-      state.ocrResults = results;
-      state.ocrText = correctOcrDomainText(combinedText);
-      state.ocrTextDirty = false;
-      state.ocrRenderMode = 'text';
-      rebuildOcrBlocks();
-      state.ocrMeta = {
-        images: files.length,
-        confidence: null,
-        engine: 'PaddleOCR',
-        elapsedMs: performance.now() - startedAt,
-        ignoredGraphics: 0,
-        tableMeta: getTableMetaFromOcrBlocks(state.ocrBlocks, 'PaddleOCR'),
-        chars: combinedText.length
-      };
-      state.ocrTitleSuggestions = generateOcrTitleSuggestions(filterOcrContentLines(combinedText));
-      state.ocrTitle = state.ocrTitleSuggestions[0]?.title || '高精度 OCR 识别结果';
-      state.ocrError = '';
-      state.stats.ocrRuns += 1;
-      persist();
-      setOcrProgress(100, '高精度识别完成', 2);
+      console.error('PaddleOCR-WASM organize failed:', error);
       state.busy = false;
       render();
-      toast('PaddleOCR 高精度识别完成。', 'success');
-    } catch (error) {
-      console.error('PaddleOCR failed:', error);
-      state.busy = false;
-      state.ocrEngine = 'local';
-      render();
-      toast(`高精度 OCR 不可用，已回退到本地 Tesseract：${error.message}`, 'error');
-      return runOcrRecognition();
-    }
-  }
-
-  async function runPaddleAiOrganize(files) {
-    const startedAt = performance.now();
-    state.busy = true;
-    state.aiResult = null;
-    render();
-    setProgress('ai', 0, 3);
-
-    try {
-      const results = [];
-      for (let index = 0; index < files.length; index += 1) {
-        const label = document.getElementById('ai-progress-label');
-        if (label) label.textContent = `PaddleOCR 识别第 ${index + 1}/${files.length} 张：${files[index].name}`;
-        const data = await callPaddleOcrApi(files[index]);
-        results.push({
-          markdown: data.markdown || data.text || '',
-          text: data.text || ''
-        });
-        const value = Math.round(30 + ((index + 1) / files.length) * 55);
-        const bar = document.getElementById('ai-progress-bar');
-        const percent = document.getElementById('ai-progress-percent');
-        if (bar) bar.style.width = `${value}%`;
-        if (percent) percent.textContent = `${value}%`;
-      }
-
-      const markdown = results.map((result) => result.markdown || result.text).join('\n\n');
-      const blocks = parseMarkdownToOcrBlocks(markdown);
-      const text = ocrBlocksToPlainText(blocks) || results.map((result) => result.text).join('\n\n');
-      setProgress('ai', 2, 3);
-      state.aiResult = buildGeneratedNote(state.importTemplate, files, text, markdown);
-      state.stats.aiRuns += 1;
-      persist();
-      state.busy = false;
-      render();
-      toast(`PaddleOCR 高精度整理完成，用时 ${((performance.now() - startedAt) / 1000).toFixed(1)} 秒。`, 'success');
-    } catch (error) {
-      console.error('PaddleOCR AI organize failed:', error);
-      state.busy = false;
-      state.ocrEngine = 'local';
-      render();
-      toast(`高精度整理不可用，已回退到本地 Tesseract：${error.message}`, 'error');
-      return runAiOrganize();
+      toast('PaddleOCR-WASM 模型加载失败，可使用 AI 增强识别兜底。', 'error');
+      return;
     }
   }
 
@@ -5845,184 +5747,13 @@
       toast('请先上传至少一张图片。', 'error');
       return;
     }
-
+    if (!OCR_WASM_SUPPORTED) {
+      toast('当前浏览器不支持 WASM，本地 OCR 已隐藏，请使用 AI 增强识别。', 'error');
+      return;
+    }
+    state.ocrEngine = state.ocrLocalEngine;
     const files = state.ocrFiles.map((file) => ({ ...file }));
-    if (state.ocrEngine === 'paddlejs') {
-      return runPaddleJsOcrRecognition(files);
-    }
-    if (state.ocrEngine === 'paddle') {
-      return runPaddleOcrRecognition(files);
-    }
-    const startedAt = performance.now();
-    let worker = null;
-    let outcome = null;
-    let lastProgress = 2;
-    const updateProgress = (percent, label, macroStep) => {
-      lastProgress = Math.max(lastProgress, percent);
-      setOcrProgress(lastProgress, label, macroStep);
-    };
-
-    state.busy = true;
-    state.ocrText = '';
-    state.ocrTitle = '';
-    state.ocrTitleSuggestions = [];
-    state.ocrTags = [];
-    state.ocrDraftHtml = '';
-    state.ocrMeta = null;
-    state.ocrResults = [];
-    state.ocrBlocks = [];
-    state.ocrForceTable = false;
-    state.ocrError = '';
-    render();
-    updateProgress(3, '准备加载 OCR 引擎…', 0);
-
-    try {
-      const Tesseract = await loadTesseractEngine();
-      updateProgress(8, 'OCR 引擎加载完成，正在初始化…', 0);
-
-      const current = { index: 0, total: files.length };
-      worker = await Tesseract.createWorker(state.ocrLang, 1, {
-        logger: (message) => {
-          const engineProgress = Number.isFinite(message.progress) ? message.progress : 0;
-          if (message.status === 'recognizing text' && current.index > 0) {
-            const overall = 16 + (((current.index - 1) + engineProgress) / files.length) * 76;
-            updateProgress(overall, `识别第 ${current.index}/${files.length} 张 · ${Math.round(engineProgress * 100)}%`, 1);
-            return;
-          }
-          const label = translateOcrStatus(message.status);
-          const enginePercent = 5 + Math.min(10, engineProgress * 10);
-          updateProgress(enginePercent, `${label}${engineProgress ? ` · ${Math.round(engineProgress * 100)}%` : '…'}`, 0);
-        },
-        errorHandler: (error) => console.warn('OCR worker error:', error)
-      });
-
-      await worker.setParameters({
-        preserve_interword_spaces: '1',
-        user_defined_dpi: '300'
-      });
-
-      const results = [];
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        current.index = index + 1;
-        updateProgress(16 + (index / files.length) * 76, `准备识别第 ${index + 1}/${files.length} 张…`, 1);
-        updateOcrFileStatus(file.id, '正在优化图片…', 'active');
-
-        try {
-          const processedImage = await preprocessImageForOcr(file.url);
-          updateOcrFileStatus(file.id, processedImage.hasTableGrid ? '检测到表格，正在逐格识别…' : '正在识别文字…', 'active');
-          let extraction = null;
-          if (!file.isSample && processedImage.tableCells?.length >= 4) {
-            extraction = await recognizeOcrTableCells(worker, processedImage.tableCells);
-          }
-          if (!extraction?.text) {
-            await worker.setParameters({
-              preserve_interword_spaces: '1',
-              tessedit_pageseg_mode: file.isSample ? '6' : '3'
-            });
-            const result = await worker.recognize(processedImage.dataUrl);
-            extraction = file.isSample
-              ? {
-                text: normalizeOcrText(result?.data?.text || ''),
-                confidence: Number(result?.data?.confidence || 0),
-                ignoredLines: 0,
-                keptLines: String(result?.data?.text || '').split('\n').length
-              }
-              : extractReliableOcrText(result);
-          } else {
-            await worker.setParameters({ preserve_interword_spaces: '1' });
-          }
-          const text = extraction.text;
-          const confidence = Math.max(0, Math.min(100, Math.round(extraction.confidence || 0)));
-          results.push({
-            id: file.id,
-            name: file.name,
-            text,
-            confidence,
-            ignoredLines: extraction.ignoredLines,
-            tableMeta: extraction.tableMeta || null,
-            error: ''
-          });
-          updateOcrFileStatus(
-            file.id,
-            text
-              ? `完成 · 置信度 ${confidence}%${extraction.tableMeta ? ` · 表格 ${extraction.tableMeta.rows}×${extraction.tableMeta.columns}` : ''}${extraction.ignoredLines ? ` · 忽略 ${extraction.ignoredLines} 个图形/噪声行` : ''}`
-              : '未检测到可靠文字',
-            text ? 'done' : 'warning'
-          );
-        } catch (fileError) {
-          console.warn(`OCR failed for ${file.name}:`, fileError);
-          results.push({
-            id: file.id,
-            name: file.name,
-            text: '',
-            confidence: 0,
-            error: fileError?.message || '识别失败'
-          });
-          updateOcrFileStatus(file.id, '识别失败', 'warning');
-        }
-        updateProgress(16 + ((index + 1) / files.length) * 76, `已完成 ${index + 1}/${files.length} 张`, 1);
-      }
-
-      updateProgress(97, '正在整理识别结果…', 2);
-      const usefulResults = results.filter((result) => result.text);
-      const ignoredGraphics = results.reduce((sum, result) => sum + (result.ignoredLines || 0), 0);
-      const averageConfidence = usefulResults.length
-        ? Math.round(usefulResults.reduce((sum, result) => sum + result.confidence, 0) / usefulResults.length)
-        : 0;
-      const elapsedMs = performance.now() - startedAt;
-
-      state.ocrResults = results;
-      state.ocrMeta = {
-        images: files.length,
-        confidence: averageConfidence,
-        elapsedMs,
-        ignoredGraphics,
-        tableMeta: results.find((result) => result.tableMeta)?.tableMeta || null,
-        chars: usefulResults.reduce((sum, result) => sum + result.text.length, 0)
-      };
-      state.stats.ocrRuns += 1;
-
-      if (!usefulResults.length) {
-        state.ocrText = '';
-        state.ocrError = '未检测到可靠文字。图形、图标和低置信度内容已自动忽略，请尝试裁剪文字区域或切换识别语言。';
-        outcome = { type: 'error', message: '未检测到可靠文字，图形和低置信度内容已忽略。' };
-      } else {
-        state.ocrText = correctOcrDomainText(usefulResults.map((result) => result.text).join('\n\n'));
-        state.ocrTextDirty = false;
-        state.ocrRenderMode = 'text';
-        if (files.some((file) => file.isSample)) state.ocrFilterIrrelevant = false;
-        rebuildOcrBlocks();
-        state.ocrTitleSuggestions = generateOcrTitleSuggestions(filterOcrContentLines(state.ocrText));
-        state.ocrTitle = state.ocrTitleSuggestions[0]?.title || 'OCR 识别结果整理';
-        state.ocrTags = inferOcrTags(state.ocrText, state.ocrTitle);
-        state.ocrFolder = '未分类';
-        state.ocrError = '';
-        updateProgress(100, '识别完成', 2);
-        outcome = { type: 'success', message: `识别完成：${files.length} 张图片，平均置信度 ${averageConfidence}%。` };
-      }
-      persist();
-    } catch (error) {
-      console.error('OCR failed:', error);
-      state.ocrText = '';
-      state.ocrMeta = null;
-      state.ocrResults = [];
-      state.ocrBlocks = [];
-      state.ocrForceTable = false;
-      state.ocrError = error?.message || 'OCR 识别失败，请稍后重试。';
-      outcome = { type: 'error', message: state.ocrError };
-    } finally {
-      if (worker) {
-        try {
-          await worker.terminate();
-        } catch (error) {
-          console.warn('OCR worker cleanup failed:', error);
-        }
-      }
-      state.busy = false;
-      render();
-      if (outcome) toast(outcome.message, outcome.type);
-    }
+    return runPaddleJsOcrRecognition(files);
   }
 
   async function copyOcrText() {
@@ -6633,7 +6364,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.22',
+      version: '7.23',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -7388,6 +7119,18 @@
   }
 
   document.addEventListener('click', (event) => {
+    const aiProvider = event.target.closest('[data-ai-provider]');
+    if (aiProvider) {
+      copyAiOcrPrompt();
+      toast(`已复制提示词，请在 ${aiProvider.dataset.aiProvider} 上传图片并粘贴结果。`, 'success');
+      return;
+    }
+
+    if (event.target.closest('[data-ai-ocr-help]')) {
+      showAiOcrHelpModal();
+      return;
+    }
+
     if (event.target.closest('[data-theme-toggle]')) {
       toggleTheme();
       return;
@@ -7798,7 +7541,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.22',
+      version: '7.23',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -7809,6 +7552,11 @@
       matrixToHtml: (matrix) => tableMatrixToHtml(matrix, true),
       matrixFromHtml: (html) => getTableMatrix(html),
       mergeSectionsHtml: (notes) => buildMergedSectionsHtml(notes),
+      aiOcrProviders: () => structuredClone(AI_OCR_PROVIDERS),
+      aiOcrPrompt: AI_OCR_PROMPT,
+      supportsWasm: OCR_WASM_SUPPORTED,
+      localEngines: () => LOCAL_ENGINE_NAMES.slice(),
+      currentLocalEngine: () => state.ocrLocalEngine,
       structureText: (template, text) => buildStructuredTextHtml(template, buildBlocksForText(text), text),
       resolveTextTemplate: (template, text) => resolveTextTemplate(template, text),
       buildExportPaperHtml: (note) => buildExportPaperHtml(note),

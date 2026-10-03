@@ -163,6 +163,27 @@
       }
     },
     {
+      name: 'PaddleOCR-WASM 和 AI 增强兜底配置正确',
+      run(api) {
+        const providers = api.aiOcrProviders();
+        assert(api.supportsWasm, '当前浏览器不支持 WASM');
+        assert(providers.some((item) => item.name === '豆包' && item.url.includes('doubao.com')), '缺少豆包入口');
+        assert(providers.some((item) => item.name === 'Kimi' && item.url.includes('moonshot.cn')), '缺少 Kimi 入口');
+        assert(providers.some((item) => item.name === 'DeepSeek' && item.url.includes('deepseek.com')), '缺少 DeepSeek 入口');
+        assert(api.aiOcrPrompt.includes('markdown'), 'AI 提示词缺少 Markdown 要求');
+      }
+    },
+    {
+      name: '本地引擎可选 PaddleOCR-WASM / PP-OCRv4 (ONNX)',
+      run(api) {
+        const engines = api.localEngines();
+        assert(Array.isArray(engines) && engines.length >= 2, '本地引擎列表不完整');
+        assert(engines.includes('PaddleOCR-WASM'), '缺少 PaddleOCR-WASM 引擎');
+        assert(engines.includes('PP-OCRv4 (ONNX)'), '缺少 PP-OCRv4 (ONNX) 引擎');
+        assert(api.currentLocalEngine() === 'paddlejs', '默认本地引擎应为 PaddleOCR-WASM');
+      }
+    },
+    {
       name: 'Markdown、PDF 排版、Excel 和纯文本导出结构完整',
       run(api) {
         const note = {
@@ -188,9 +209,9 @@
       }
     },
     {
-      name: '应用版本为 v7.22',
+      name: '应用版本为 v7.23',
       run(api) {
-        assert(api.version === '7.22', `版本为 ${api.version}`);
+        assert(api.version === '7.23', `版本为 ${api.version}`);
       }
     }
   ];

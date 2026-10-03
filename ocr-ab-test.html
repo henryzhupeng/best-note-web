@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#2f6f68" />
+  <title>优记 · OCR A/B 对比</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <style>
+    :root {
+      --ink: #17201d;
+      --ink-soft: #59645f;
+      --ink-faint: #8c9691;
+      --paper: #f6f7f4;
+      --surface: #ffffff;
+      --surface-muted: #eef2ee;
+      --line: #dfe6e1;
+      --primary: #2f6f68;
+      --primary-dark: #245a55;
+      --primary-soft: #e8f2f0;
+      --accent: #e59a4a;
+      --accent-soft: #fff7ed;
+      --danger: #c2413b;
+      --success: #3a8f76;
+      --shadow: 0 1px 2px rgba(22, 32, 29, .05), 0 10px 30px rgba(22, 32, 29, .06);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      color: var(--ink);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); }
+    a { color: var(--primary); }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 18px 64px; }
+    header.top { display: flex; align-items: center; gap: 12px; padding: 8px 0 18px; flex-wrap: wrap; }
+    header.top img { width: 34px; height: 34px; border-radius: 9px; }
+    header.top h1 { font-size: 19px; margin: 0; }
+    header.top .sub { color: var(--ink-faint); font-size: 13px; }
+    header.top .spacer { flex: 1; }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 18px; margin-bottom: 16px; }
+    .hint { color: var(--ink-soft); font-size: 13.5px; line-height: 1.6; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--primary-soft); color: var(--primary-dark); }
+    .badge.warn { background: var(--accent-soft); color: #a35f16; }
+    .badge.err { background: #fdebea; color: var(--danger); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+    button, .filebtn { font: inherit; }
+    .btn { border: 1px solid transparent; background: var(--primary); color: #fff; border-radius: 10px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
+    .btn[disabled] { opacity: .5; cursor: not-allowed; }
+    .btn.secondary { background: var(--surface); color: var(--ink); border-color: var(--line); }
+    .btn.ghost { background: transparent; color: var(--primary); border-color: var(--line); }
+    .filebtn { position: relative; overflow: hidden; display: inline-flex; }
+    .filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    select { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: #fff; font-size: 13.5px; }
+    .drop { border: 1.5px dashed var(--line); border-radius: 14px; padding: 26px 18px; text-align: center; color: var(--ink-soft); margin-top: 14px; transition: .15s; }
+    .drop.over { border-color: var(--primary); background: var(--primary-soft); }
+    .drop strong { display: block; font-size: 15px; color: var(--ink); margin-bottom: 4px; }
+    .preview { display: flex; gap: 12px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+    .preview img { max-height: 90px; border-radius: 10px; border: 1px solid var(--line); }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+    .col { display: flex; flex-direction: column; }
+    .col h2 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+    .col .meta { color: var(--ink-faint); font-size: 12.5px; margin-bottom: 10px; min-height: 18px; }
+    .score { font-weight: 600; }
+    .score.good { color: var(--success); }
+    .score.bad { color: var(--danger); }
+    textarea { width: 100%; min-height: 320px; resize: vertical; border: 1px solid var(--line); border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.7; font-family: inherit; background: #fcfdfc; }
+    .col .foot { display: flex; gap: 8px; margin-top: 10px; }
+    .diff { margin-top: 6px; }
+    .diff table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .diff td { border: 1px solid var(--line); padding: 6px 9px; vertical-align: top; width: 50%; }
+    .diff tr.only-left td:first-child { background: #fff7ed; }
+    .diff tr.only-right td:last-child { background: #eef7f4; }
+    .diff tr.same td { color: var(--ink-faint); }
+    .log { margin-top: 10px; font-size: 12.5px; color: var(--ink-faint); white-space: pre-wrap; }
+    .footer-note { color: var(--ink-faint); font-size: 12.5px; line-height: 1.7; }
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <img src="./icon.svg" alt="" />
+    <div>
+      <h1>OCR A/B 对比</h1>
+      <div class="sub">同一张图片，两种识别方式并排对比 · 全程本地 · 不上传</div>
+    </div>
+    <span class="spacer"></span>
+    <a class="btn ghost" href="./index.html">返回优记</a>
+  </header>
+
+  <section class="card">
+    <p class="hint">
+      <span class="badge">PaddleOCR-WASM 本地引擎</span>
+      <span class="badge warn">不联网、无 Token</span>
+      此页只用于诊断，不会写入你的笔记。<br />
+      <strong>A 列</strong>：PaddleOCR-WASM 直接识别原图。<strong>B 列</strong>：可选三种策略 ——
+      PP-OCRv4 (ONNX)、增强预处理、Otsu 二值化；若你注册了 <code>window.BestNoteAltOcr</code>，B 列会优先使用它。
+    </p>
+
+    <div class="drop" id="drop">
+      <strong>拖入截图，或点击选择图片</strong>
+      <span>也支持直接 Ctrl / ⌘ + V 粘贴剪贴板图片</span>
+      <input id="file" type="file" accept="image/*" style="display:none" />
+    </div>
+
+    <div class="preview" id="preview" hidden>
+      <img id="thumb" alt="预览" />
+      <div>
+        <div id="fileName" class="hint"></div>
+        <div id="fileSize" class="hint"></div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn" id="run" disabled>开始 A/B 对比</button>
+      <label class="hint">B 列策略
+        <select id="mode">
+          <option value="onnx">PP-OCRv4 (ONNX，本地，首次下载约 15MB)</option>
+          <option value="enhance">增强预处理（灰度 + 拉伸 + 2×放大）</option>
+          <option value="binarize">二值化（Otsu）</option>
+        </select>
+      </label>
+      <button class="btn secondary" id="sample">使用示例图片</button>
+      <button class="btn ghost" id="preload">预加载 ONNX 模型</button>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="cols">
+    <div class="card col">
+      <h2>A · 原始识别 <span class="badge">PaddleOCR-WASM</span></h2>
+      <div class="meta" id="metaA">等待识别</div>
+      <textarea id="textA" placeholder="A 列结果" spellcheck="false"></textarea>
+      <div class="foot">
+        <button class="btn secondary" id="copyA" disabled>复制 A</button>
+      </div>
+    </div>
+    <div class="card col">
+      <h2>B · 备用引擎 <span class="badge warn" id="engineB">增强预处理</span></h2>
+      <div class="meta" id="metaB">等待识别</div>
+      <textarea id="textB" placeholder="B 列结果" spellcheck="false"></textarea>
+      <div class="foot">
+        <button class="btn secondary" id="copyB" disabled>复制 B</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:15px;margin:0 0 8px;">差异对照</h2>
+    <div class="meta hint" id="diffMeta">运行对比后显示</div>
+    <div class="diff" id="diff"></div>
+  </section>
+
+  <p class="footer-note">
+    说明：B 列的“增强预处理”与 A 列使用同一个本地模型，只是输入图像不同，因此可以用来判断“是图像质量拖累了识别”还是“模型本身不认”。
+    若两种方式都识别不好，说明该图超过本地模型能力，建议使用优记 OCR 页的「AI 增强识别」跳转豆包 / Kimi / DeepSeek。
+  </p>
+</div>
+
+<canvas id="canvas"></canvas>
+<script src="./ocr-ab-lib.js"></script>
+<script src="./ocr-onnx-lib.js"></script>
+<script src="./ocr-onnx-engine.js"></script>
+<script>
+(function () {
+  const lib = window.BestNoteAbLib;
+  const PADDLE_URL = 'https://cdn.jsdelivr.net/npm/@paddlejs-models/ocr@1.2.4/lib/index.js';
+  const $ = (id) => document.getElementById(id);
+
+  let currentFile = null;
+  let currentUrl = '';
+  let enginePromise = null;
+
+  function setLog(message) {
+    $('log').textContent = message ? `${new Date().toLocaleTimeString()}  ${message}` : '';
+  }
+
+  function loadEngine() {
+    if (window.paddlejs?.ocr?.recognize) return window.paddlejs.ocr.init().then(() => window.paddlejs.ocr);
+    if (enginePromise) return enginePromise;
+    enginePromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = PADDLE_URL;
+      script.async = true;
+      script.onload = () => {
+        const engine = window.paddlejs?.ocr;
+        if (!engine?.recognize) return reject(new Error('PaddleOCR-WASM 初始化失败'));
+        engine.init().then(() => resolve(engine)).catch(reject);
+      };
+      script.onerror = () => reject(new Error('PaddleOCR-WASM 脚本加载失败，请检查网络'));
+      document.head.appendChild(script);
+    });
+    return enginePromise;
+  }
+
+  function imageFromUrl(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('图片读取失败'));
+      img.src = url;
+    });
+  }
+
+  function readText(result) {
+    if (Array.isArray(result?.text)) return result.text.join('\n');
+    return String(result?.text || '');
+  }
+
+  async function recognizeOriginal(url) {
+    const engine = await loadEngine();
+    const img = await imageFromUrl(url);
+    return readText(await engine.recognize(img));
+  }
+
+  function drawToCanvas(img, scale) {
+    const canvas = $('canvas');
+    const maxSide = 2400;
+    let s = scale;
+    if (img.naturalWidth * s > maxSide || img.naturalHeight * s > maxSide) {
+      s = Math.min(maxSide / img.naturalWidth, maxSide / img.naturalHeight);
+    }
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * s));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * s));
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return ctx;
+  }
+
+  async function recognizeEnhanced(url, mode) {
+    const engine = await loadEngine();
+    const img = await imageFromUrl(url);
+    const ctx = drawToCanvas(img, 2);
+    const frame = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+    let gray = lib.toGrayscale(frame);
+    if (mode === 'binarize') {
+      gray = lib.contrastStretch(gray);
+      gray = lib.binarize(gray);
+    } else {
+      gray = lib.contrastStretch(gray);
+    }
+    const rgba = lib.grayscaleToRgba(gray);
+    ctx.putImageData(new ImageData(rgba, ctx.canvas.width, ctx.canvas.height), 0, 0);
+    return readText(await engine.recognize(ctx.canvas));
+  }
+
+  function hasAltEngine() {
+    return typeof window.BestNoteAltOcr?.recognize === 'function';
+  }
+
+  function bLabel(mode) {
+    if (hasAltEngine()) return '外部引擎';
+    if (mode === 'onnx') return 'PP-OCRv4 (ONNX)';
+    return mode === 'binarize' ? '二值化预处理' : '增强预处理';
+  }
+
+  async function runB(url, mode) {
+    if (hasAltEngine()) return readText(await window.BestNoteAltOcr.recognize({ url, mode }));
+    if (mode === 'onnx') {
+      if (!window.BestNoteOnnxOcr?.recognize) throw new Error('ONNX 引擎未加载');
+      const result = await window.BestNoteOnnxOcr.recognize(url);
+      return result.text;
+    }
+    return recognizeEnhanced(url, mode);
+  }
+
+  function formatMeta(text, ms) {
+    const stats = lib.textStats(text);
+    const score = lib.qualityScore(text);
+    return {
+      html: `${stats.lines} 行 · ${stats.chars} 字符 · 质量分 <span class="score ${score >= 60 ? 'good' : 'bad'}">${score}</span> · ${(ms / 1000).toFixed(1)}s`,
+      score
+    };
+  }
+
+  async function runCompare() {
+    if (!currentUrl) return;
+    const mode = $('mode').value;
+    $('run').disabled = true;
+    $('engineB').textContent = bLabel(mode);
+    $('metaA').textContent = '识别中…';
+    $('metaB').textContent = '识别中…';
+    setLog(mode === 'onnx' ? '正在加载 ONNX 运行时与 PP-OCRv4 模型（首次约 15MB，之后走浏览器缓存）…' : '正在加载本地模型…');
+    let a = '';
+    let b = '';
+    try {
+      const t0 = performance.now();
+      a = lib.normalizeText(await recognizeOriginal(currentUrl));
+      const dtA = performance.now() - t0;
+      $('textA').value = a;
+      $('metaA').innerHTML = formatMeta(a, dtA).html;
+      $('copyA').disabled = !a;
+    } catch (error) {
+      $('metaA').innerHTML = `<span class="badge err">失败</span> ${error.message}`;
+      setLog(`A 列失败：${error.message}`);
+    }
+    try {
+      setLog('正在运行 B 列…');
+      const t0 = performance.now();
+      b = lib.normalizeText(await runB(currentUrl, mode));
+      const dtB = performance.now() - t0;
+      $('textB').value = b;
+      $('metaB').innerHTML = formatMeta(b, dtB).html;
+      $('copyB').disabled = !b;
+    } catch (error) {
+      $('metaB').innerHTML = `<span class="badge err">失败</span> ${error.message}`;
+      setLog(`B 列失败：${error.message}`);
+    }
+    if (a || b) {
+      const diff = lib.diffLines(a, b);
+      $('diffMeta').innerHTML = `一致率 <strong>${diff.agreement}%</strong> · 共 ${diff.rows.length} 行`;
+      $('diff').innerHTML = `<table>${diff.rows.slice(0, 200).map((row) => `
+        <tr class="${row.tag}"><td>${row.left ? esc(row.left) : '<span style="color:#c9d4cd">—</span>'}</td><td>${row.right ? esc(row.right) : '<span style="color:#c9d4cd">—</span>'}</td></tr>
+      `).join('')}</table>`;
+      setLog('对比完成');
+    }
+    $('run').disabled = false;
+  }
+
+  function esc(text) {
+    return String(text).replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+  }
+
+  function acceptFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    if (currentUrl.startsWith('blob:')) URL.revokeObjectURL(currentUrl);
+    currentFile = file;
+    currentUrl = URL.createObjectURL(file);
+    $('thumb').src = currentUrl;
+    $('preview').hidden = false;
+    $('fileName').textContent = file.name || '剪贴板图片';
+    $('fileSize').textContent = `${Math.round(file.size / 1024)} KB`;
+    $('run').disabled = false;
+    $('textA').value = '';
+    $('textB').value = '';
+    $('diff').innerHTML = '';
+    $('diffMeta').textContent = '运行对比后显示';
+    setLog('已选择图片，点击「开始 A/B 对比」');
+  }
+
+  function makeSample() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 720;
+    canvas.height = 420;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#111111';
+    ctx.font = '26px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText('本周训练计划', 32, 56);
+    const rows = [
+      ['动作', '组数', '次数', '备注'],
+      ['深蹲', '4', '8', '保持核心收紧'],
+      ['硬拉', '3', '6', '不要弓背'],
+      ['卧推', '4', '8', '肩胛收紧'],
+      ['引体向上', '3', '10', 'full range']
+    ];
+    ctx.font = '22px "PingFang SC", "Microsoft YaHei", sans-serif';
+    rows.forEach((row, r) => {
+      row.forEach((cell, c) => {
+        ctx.fillText(cell, 36 + c * 170, 120 + r * 58);
+      });
+    });
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(new File([blob], '示例-训练计划.png', { type: 'image/png' })), 'image/png'));
+  }
+
+  $('drop').addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', (event) => acceptFile(event.target.files[0]));
+  ['dragenter', 'dragover'].forEach((type) => $('drop').addEventListener(type, (event) => {
+    event.preventDefault();
+    $('drop').classList.add('over');
+  }));
+  ['dragleave', 'drop'].forEach((type) => $('drop').addEventListener(type, (event) => {
+    event.preventDefault();
+    $('drop').classList.remove('over');
+  }));
+  $('drop').addEventListener('drop', (event) => acceptFile(event.dataTransfer.files[0]));
+  document.addEventListener('paste', (event) => {
+    const item = [...(event.clipboardData?.items || [])].find((it) => it.type.startsWith('image/'));
+    if (item) acceptFile(item.getAsFile());
+  });
+  $('run').addEventListener('click', runCompare);
+  $('preload').addEventListener('click', async () => {
+    if (!window.BestNoteOnnxOcr?.load) return setLog('ONNX 引擎未加载');
+    setLog('正在下载 onnxruntime-web 与 PP-OCRv4 模型（首次约 15MB）…');
+    try {
+      await window.BestNoteOnnxOcr.load();
+      setLog('ONNX 模型加载成功，可切换到「PP-OCRv4 (ONNX)」进行对比。');
+    } catch (error) {
+      setLog(`ONNX 模型加载失败：\n${error.message}`);
+    }
+  });
+  $('sample').addEventListener('click', async () => {
+    acceptFile(await makeSample());
+    runCompare();
+  });
+  $('copyA').addEventListener('click', () => navigator.clipboard.writeText($('textA').value).then(() => setLog('已复制 A 列结果')));
+  $('copyB').addEventListener('click', () => navigator.clipboard.writeText($('textB').value).then(() => setLog('已复制 B 列结果')));
+})();
+</script>
+</body>
+</html>

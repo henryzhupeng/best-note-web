@@ -5314,3 +5314,139 @@ canvas { max-width: 100%; }
   width: 38px;
   height: 38px;
 }
+/* PaddleOCR-WASM and AI enhancement menu */
+.wasm-engine-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.wasm-engine-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--line));
+  border-radius: 8px;
+  background: var(--primary-soft);
+}
+
+.wasm-engine-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 15px;
+}
+
+.wasm-engine-card strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 11px; }
+.wasm-engine-card p { margin: 0; color: var(--ink-soft); font-size: 9px; line-height: 1.55; }
+.ocr-wasm-warning { margin: 0; color: var(--danger); font-size: 10px; }
+.wasm-engine-card > div { min-width: 0; flex: 1; }
+.local-engine-picker { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 9px; color: var(--ink-soft); flex-wrap: wrap; }
+.local-engine-picker select { border: 1px solid var(--line-strong); border-radius: 6px; padding: 3px 6px; background: #fff; font-size: 9.5px; color: var(--ink); max-width: 100%; }
+.local-engine-picker select:disabled { opacity: .6; }
+@media (max-width: 560px) {
+  .local-engine-picker { width: 100%; }
+  .local-engine-picker select { flex: 1; }
+}
+
+.ocr-unavailable {
+  display: grid;
+  max-width: 680px;
+  min-height: 320px;
+  margin: 30px auto;
+  padding: 34px;
+  place-items: center;
+  align-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.ocr-unavailable > span {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  margin-bottom: 14px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 850;
+}
+
+.ocr-unavailable h2 { margin-bottom: 7px; font-size: 18px; }
+.ocr-unavailable p { max-width: 440px; margin: 0 0 18px; color: var(--ink-soft); font-size: 11px; line-height: 1.7; }
+
+.ai-enhance-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.ai-enhance-dropdown > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--ink));
+  font-size: 9px;
+  font-weight: 780;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ai-enhance-dropdown > summary::-webkit-details-marker { display: none; }
+.ai-enhance-dropdown[open] > summary { border-color: var(--accent); }
+.ai-enhance-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  right: 0;
+  display: grid;
+  width: 230px;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.ai-enhance-menu p { margin: 0 0 4px; color: var(--ink-faint); font-size: 9px; line-height: 1.55; }
+.ai-enhance-menu a,
+.ai-enhance-menu button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface-muted);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.ai-enhance-menu a:hover,
+.ai-enhance-menu button:hover { background: var(--primary-soft); }
+.ai-enhance-menu strong { font-size: 10px; }
+.ai-enhance-menu small { color: var(--ink-faint); font-size: 8px; }
+.ai-enhance-dropdown.compact > summary { min-height: 30px; padding: 0 9px; }
+.ai-help-flow { display: grid; gap: 7px; margin: 14px 0; }
+.ai-help-flow span { padding: 9px 10px; border-radius: 7px; background: var(--surface-muted); color: var(--ink-soft); font-size: 10px; }
+.ai-help-note { color: var(--ink-faint) !important; }
+
+@media (max-width: 760px) {
+  .ai-enhance-dropdown { width: auto; }
+  .ai-enhance-menu { position: fixed; top: 118px; right: 12px; left: 12px; width: auto; }
+  .ocr-unavailable { margin: 16px auto; padding: 24px 18px; }
+}
