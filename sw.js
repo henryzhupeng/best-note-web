@@ -1,9 +1,9 @@
-const CACHE_NAME = 'best-note-v7.23';
+const CACHE_NAME = 'best-note-v7.24';
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=7.23',
-  './app.js?v=7.23',
+  './styles.css?v=7.24',
+  './app.js?v=7.24',
   './manifest.json',
   './icon.svg',
   './icon-192.png',
@@ -13,7 +13,8 @@ const SHELL = [
   './ocr-ab-test.html',
   './ocr-ab-lib.js',
   './ocr-onnx-lib.js',
-  './ocr-onnx-engine.js'
+  './ocr-onnx-engine.js',
+  './stitch-crop-lib.js'
 ];
 
 const SHARE_DB_NAME = 'best-note-web-db';

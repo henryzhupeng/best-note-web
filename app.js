@@ -433,8 +433,11 @@
     ocrLang: 'chi_sim+eng',
     ocrEngine: 'paddlejs',
     ocrLocalEngine: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-local-engine') === 'onnx') ? 'onnx' : 'paddlejs',
+    ocrPreciseTable: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-precise-table') === '1'),
     ocrReturnNoteId: null,
     workspaceCursorBlockIndex: null,
+    navHistory: [],
+    templatePanelOpen: null,
     ocrRenderMode: 'text',
     ocrFilterIrrelevant: true,
     ocrTextDirty: false,
@@ -936,7 +939,7 @@
     const parser = new DOMParser();
     const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
     const wrapper = doc.body.firstElementChild;
-    const allowed = new Set(['H3', 'P', 'UL', 'OL', 'LI', 'STRONG', 'EM', 'BR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'BLOCKQUOTE', 'CODE', 'DIV']);
+    const allowed = new Set(['H3', 'P', 'UL', 'OL', 'LI', 'STRONG', 'EM', 'BR', 'TABLE', 'COLGROUP', 'COL', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'BLOCKQUOTE', 'CODE', 'DIV']);
     const walker = doc.createTreeWalker(wrapper, NodeFilter.SHOW_ELEMENT);
     const elements = [];
     while (walker.nextNode()) elements.push(walker.currentNode);
@@ -946,6 +949,12 @@
         return;
       }
       [...element.attributes].forEach((attribute) => {
+        if (element.tagName === 'COL' && attribute.name === 'style') {
+          const match = attribute.value.match(/width\s*:\s*([\d.]+)%/);
+          if (match) element.setAttribute('style', `width:${match[1]}%`);
+          else element.removeAttribute('style');
+          return;
+        }
         if (attribute.name === 'class') {
           const safeClasses = attribute.value.split(/\s+/).filter((name) => ['apple-table-wrap', 'merged-section'].includes(name));
           if (safeClasses.length) element.setAttribute('class', safeClasses.join(' '));
@@ -1082,7 +1091,13 @@
     if (mobileBrand) mobileBrand.style.display = inWorkspace ? 'none' : '';
   }
 
+  let lastRenderRoute = null;
+  let lastRenderNoteId = null;
+
   function render() {
+    const routeChanged = lastRenderRoute !== state.route;
+    const noteChanged = lastRenderNoteId !== state.noteId;
+    const previousScroll = typeof window.scrollY === 'number' ? window.scrollY : 0;
     updateChrome();
     if (state.route === 'workspace') root.innerHTML = renderWorkspace();
     if (state.route === 'home') root.innerHTML = renderHome();
@@ -1104,7 +1119,14 @@
     updateTopActions();
     updateTrashCount();
     bindViewEvents();
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    // 只在切换页面时回到顶部；同一页面内的按钮/重绘保持当前滚动位置，避免打断编辑。
+    if (routeChanged || noteChanged) {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    } else if (previousScroll > 0) {
+      window.scrollTo({ top: previousScroll, behavior: 'auto' });
+    }
+    lastRenderRoute = state.route;
+    lastRenderNoteId = state.noteId;
   }
 
   function aiEnhanceDropdown(compact = false) {
@@ -1258,6 +1280,7 @@
       <div class="workspace-editor-head">
         <div class="workspace-breadcrumb"><span class="workspace-status-dot"></span>${escapeHtml(note.folder || '未分类')}</div>
         <div class="workspace-editor-actions">
+          <button class="workspace-back" type="button" data-workspace-back title="返回上一页">← 返回</button>
           <button class="workspace-list-toggle" type="button" data-workspace-list-toggle>笔记列表</button>
           <div class="workspace-mode-switch" role="group" aria-label="编辑模式">
             <button type="button" data-workspace-mode="rich" class="${state.workspaceMode === 'rich' ? 'active' : ''}">编辑</button>
@@ -1267,6 +1290,8 @@
           <button class="btn secondary small" type="button" data-rerun-ocr="${escapeHtml(note.id)}" ${note.sourceImages?.length ? '' : 'disabled'}>重新 OCR</button>
           ${aiEnhanceDropdown()}
           <button class="btn secondary small" type="button" data-paste-image>粘贴图片</button>
+          <button class="btn ghost small" type="button" id="workspace-undo" data-workspace-undo disabled title="撤销上一步编辑">↶ 撤销</button>
+          <button class="btn ghost small" type="button" id="workspace-redo" data-workspace-redo disabled title="重做">↷ 重做</button>
           <button class="btn secondary small" type="button" data-export="${escapeHtml(note.id)}">导出</button>
           <button class="btn danger small icon-only" type="button" data-delete-note="${escapeHtml(note.id)}" title="删除笔记">×</button>
         </div>
@@ -1702,16 +1727,23 @@
             </div>
 
             <span class="form-label">02 选择整理模板</span>
-            <div class="template-grid">
-              ${Object.entries(templates).map(([key, template]) => `
-                <button class="template-card ${state.importTemplate === key ? 'active' : ''}" data-template="${key}">
-                  <span class="template-icon">${template.icon}</span>
-                  <strong>${template.name}</strong>
-                  <small>${template.description}</small>
-                  <em>${(templateSamples[key] || []).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</em>
-                </button>
-              `).join('')}
-            </div>
+            <details class="template-collapse" data-template-collapse ${templateCollapseOpen() ? 'open' : ''}>
+              <summary>
+                <span class="template-collapse-label">当前模板</span>
+                <strong>${(templates[state.importTemplate] || templates.auto).icon} ${escapeHtml((templates[state.importTemplate] || templates.auto).name)}</strong>
+                <em>展开 / 收起</em>
+              </summary>
+              <div class="template-grid">
+                ${Object.entries(templates).map(([key, template]) => `
+                  <button class="template-card ${state.importTemplate === key ? 'active' : ''}" data-template="${key}">
+                    <span class="template-icon">${template.icon}</span>
+                    <strong>${template.name}</strong>
+                    <small>${template.description}</small>
+                    <em>${(templateSamples[key] || []).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</em>
+                  </button>
+                `).join('')}
+              </div>
+            </details>
 
             <div class="progress-box" id="ai-progress">
               <div class="progress-head"><span id="ai-progress-label">准备处理</span><span id="ai-progress-percent">0%</span></div>
@@ -1845,6 +1877,10 @@
                       <option value="onnx" ${state.ocrLocalEngine === 'onnx' ? 'selected' : ''}>PP-OCRv4 (ONNX，更准，首次约 15MB)</option>
                     </select>
                   </label>
+                  <label class="precise-table-toggle">
+                    <input type="checkbox" id="ocr-precise-table" ${state.ocrPreciseTable ? 'checked' : ''} ${state.busy ? 'disabled' : ''} />
+                    <span>表格逐格精修（更准，但每个单元格都要单独识别一次，明显更慢）</span>
+                  </label>
                 </div>
               </div>
               <div class="ocr-setting-copy">
@@ -1873,6 +1909,7 @@
             ${files.length ? `
               <div class="ocr-file-actions">
                 <span>已选择 ${files.length} 张图片${files.some((file) => file.isSample) ? ' · 包含示例图片' : ''}</span>
+                <button class="text-link" id="stitch-ocr-files" type="button" ${state.busy || files.length < 2 ? 'disabled' : ''}>拼接为长图</button>
                 <button class="text-link" id="clear-ocr-files" type="button" ${state.busy ? 'disabled' : ''}>清空全部图片</button>
               </div>
               <div class="ocr-file-list" id="ocr-file-list">
@@ -1887,6 +1924,10 @@
                       <span class="ocr-file-index">${index + 1}</span>
                       <span class="ocr-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
                       <span class="ocr-file-status">${statusText}</span>
+                      <span class="ocr-file-order">
+                        <button type="button" data-ocr-move="${escapeHtml(file.id)}" data-ocr-move-dir="-1" ${index === 0 ? 'disabled' : ''} title="上移">↑</button>
+                        <button type="button" data-ocr-move="${escapeHtml(file.id)}" data-ocr-move-dir="1" ${index === files.length - 1 ? 'disabled' : ''} title="下移">↓</button>
+                      </span>
                     </div>
                   `;
                 }).join('')}
@@ -1925,6 +1966,7 @@
                     <span><strong>${meta.tableMeta.lowConfidenceCells}</strong> 待核对单元格</span>
                   ` : ''}
                   <span><strong>${(meta.elapsedMs / 1000).toFixed(1)}s</strong> 处理耗时</span>
+                  ${meta.timing ? `<span title="图片预处理 / 模型识别 / 单元格识别次数"><strong>${(meta.timing.preprocessMs / 1000).toFixed(1)}s</strong> 预处理 · <strong>${(meta.timing.ocrMs / 1000).toFixed(1)}s</strong> 识别${meta.timing.cellRuns ? ` · <strong>${meta.timing.cellRuns}</strong> 次逐格` : ''}</span>` : ''}
                 </div>
               ` : ''}
               <div class="ocr-title-editor">
@@ -2142,6 +2184,14 @@
     });
   }
 
+  function templateCollapseOpen() {
+    if (state.templatePanelOpen === null) {
+      const mobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches;
+      state.templatePanelOpen = !mobile;
+    }
+    return state.templatePanelOpen;
+  }
+
   function renderPaste() {
     const parsed = state.pasteParsed;
     const suspiciousCount = countSuspiciousOcrCells(state.pasteBlocks);
@@ -2159,16 +2209,23 @@
             <span class="step">AI 结构化是核心能力</span>
           </div>
           <div class="panel-body">
-            <div class="text-template-grid">
-              ${Object.entries(textTemplates).map(([key, template]) => `
-                <button class="text-template-card ${state.pasteTemplate === key ? 'active' : ''}" type="button" data-paste-template="${key}">
-                  <span>${template.icon}</span>
-                  <strong>${template.name}</strong>
-                  <small>${template.description}</small>
-                  <em>${template.sample.map((line) => `<i>${escapeHtml(line)}</i>`).join('')}</em>
-                </button>
-              `).join('')}
-            </div>
+            <details class="template-collapse" data-template-collapse ${templateCollapseOpen() ? 'open' : ''}>
+              <summary>
+                <span class="template-collapse-label">当前模板</span>
+                <strong>${(textTemplates[state.pasteTemplate] || textTemplates.auto).icon} ${escapeHtml((textTemplates[state.pasteTemplate] || textTemplates.auto).name)}</strong>
+                <em>展开 / 收起</em>
+              </summary>
+              <div class="text-template-grid">
+                ${Object.entries(textTemplates).map(([key, template]) => `
+                  <button class="text-template-card ${state.pasteTemplate === key ? 'active' : ''}" type="button" data-paste-template="${key}">
+                    <span>${template.icon}</span>
+                    <strong>${template.name}</strong>
+                    <small>${template.description}</small>
+                    <em>${template.sample.map((line) => `<i>${escapeHtml(line)}</i>`).join('')}</em>
+                  </button>
+                `).join('')}
+              </div>
+            </details>
 
             <div class="divider"></div>
             <div class="panel-header inline-panel-head">
@@ -2345,6 +2402,13 @@
   }
 
   function navigate(route, options = {}) {
+    const fromRoute = state.route;
+    const fromNoteId = state.noteId;
+    const changing = fromRoute !== route || (options.noteId && options.noteId !== fromNoteId);
+    if (changing && options.replaceHistory !== true) {
+      state.navHistory.push({ route: fromRoute, noteId: fromNoteId });
+      if (state.navHistory.length > 30) state.navHistory.shift();
+    }
     if (options.noteId) state.noteId = options.noteId;
     if (route !== 'notes' && options.keepSearch !== true) {
       state.search = '';
@@ -2357,6 +2421,15 @@
     if (route !== 'note') state.sectionSortMode = false;
     if (route !== 'import' && state.aiResult) state.aiResult = state.aiResult;
     render();
+  }
+
+  function goBack() {
+    const previous = state.navHistory.pop();
+    if (previous?.route) {
+      navigate(previous.route, { noteId: previous.noteId, replaceHistory: true });
+      return;
+    }
+    navigate('notes', { replaceHistory: true });
   }
 
   async function rerunOcrForNote(noteId) {
@@ -2408,6 +2481,66 @@
       dropzone.classList.remove('dragging');
     }));
     dropzone.addEventListener('drop', (event) => acceptFiles(event.dataTransfer?.files));
+  }
+
+  // ---- 笔记编辑撤销 / 重做 ----
+  const workspaceUndo = { noteId: null, stack: [], redo: [], last: '', timer: null };
+
+  function syncWorkspaceUndoButtons() {
+    const canUndo = workspaceUndo.stack.length > 0;
+    const canRedo = workspaceUndo.redo.length > 0;
+    const undoButton = document.getElementById('workspace-undo');
+    const redoButton = document.getElementById('workspace-redo');
+    if (undoButton) undoButton.disabled = !canUndo;
+    if (redoButton) redoButton.disabled = !canRedo;
+  }
+
+  function resetWorkspaceUndo(html) {
+    workspaceUndo.noteId = state.noteId;
+    workspaceUndo.stack = [];
+    workspaceUndo.redo = [];
+    workspaceUndo.last = html ?? document.getElementById('detail-content')?.innerHTML ?? '';
+    if (workspaceUndo.timer) {
+      clearTimeout(workspaceUndo.timer);
+      workspaceUndo.timer = null;
+    }
+    syncWorkspaceUndoButtons();
+  }
+
+  function scheduleWorkspaceUndoCapture() {
+    if (workspaceUndo.timer) return;
+    const before = workspaceUndo.last;
+    workspaceUndo.timer = setTimeout(() => {
+      workspaceUndo.timer = null;
+      const content = document.getElementById('detail-content');
+      if (!content) return;
+      const now = content.innerHTML;
+      if (now === before) return;
+      workspaceUndo.stack.push(before);
+      if (workspaceUndo.stack.length > 60) workspaceUndo.stack.shift();
+      workspaceUndo.redo.length = 0;
+      workspaceUndo.last = now;
+      syncWorkspaceUndoButtons();
+    }, 600);
+  }
+
+  function applyWorkspaceUndo(direction) {
+    const content = document.getElementById('detail-content');
+    if (!content) return;
+    const from = direction === 'redo' ? workspaceUndo.redo : workspaceUndo.stack;
+    const to = direction === 'redo' ? workspaceUndo.stack : workspaceUndo.redo;
+    if (!from.length) return;
+    const current = content.innerHTML;
+    const target = from.pop();
+    to.push(current);
+    content.innerHTML = target;
+    workspaceUndo.last = target;
+    workspaceUndo.timer = null;
+    syncWorkspaceUndoButtons();
+    scheduleWorkspaceAutosave();
+    const caret = content.querySelector('p, li, td, h3') || content;
+    caret.scrollIntoView?.({ block: 'nearest' });
+    toast(direction === 'redo' ? '已重做。' : '已撤销。', 'success');
   }
 
   function scheduleWorkspaceAutosave() {
@@ -2585,6 +2718,13 @@
     const clearOcrButton = document.getElementById('clear-ocr-files');
     if (clearOcrButton) clearOcrButton.addEventListener('click', clearOcrFiles);
 
+    const stitchOcrButton = document.getElementById('stitch-ocr-files');
+    if (stitchOcrButton) stitchOcrButton.addEventListener('click', stitchOcrFiles);
+
+    document.querySelectorAll('[data-ocr-move]').forEach((button) => {
+      button.addEventListener('click', () => moveOcrFile(button.dataset.ocrMove, button.dataset.ocrMoveDir));
+    });
+
     const ocrLanguage = document.getElementById('ocr-language');
     if (ocrLanguage) ocrLanguage.addEventListener('change', (event) => {
       state.ocrLang = event.target.value;
@@ -2682,6 +2822,16 @@
 
     const runOcr = document.getElementById('run-ocr');
     if (runOcr) runOcr.addEventListener('click', runOcrRecognition);
+
+    document.querySelectorAll('[data-template-collapse]').forEach((element) => {
+      element.addEventListener('toggle', () => { state.templatePanelOpen = element.open; });
+    });
+
+    const preciseTableToggle = document.getElementById('ocr-precise-table');
+    if (preciseTableToggle) preciseTableToggle.addEventListener('change', (event) => {
+      setPreciseTable(event.target.checked);
+      toast(event.target.checked ? '已开启表格逐格精修，识别会更慢。' : '已关闭表格逐格精修，识别更快。', 'success');
+    });
 
     const localEngineSelect = document.getElementById('ocr-local-engine');
     if (localEngineSelect) localEngineSelect.addEventListener('change', (event) => {
@@ -2813,11 +2963,256 @@
       if (!element) return;
       element.addEventListener('input', scheduleWorkspaceAutosave);
     });
+    const detailContent = document.getElementById('detail-content');
+    if (detailContent) {
+      if (workspaceUndo.noteId !== state.noteId) resetWorkspaceUndo(detailContent.innerHTML);
+      detailContent.addEventListener('input', scheduleWorkspaceUndoCapture);
+    }
     document.getElementById('detail-folder')?.addEventListener('change', scheduleWorkspaceAutosave);
 
     bindWorkspaceImageDropzone();
     setupWorkspaceNoteSorting();
     setupSectionSorting();
+  }
+
+  // ---- 多张截图拼接长图 ----
+  const STITCH_MAX_SIDE = 12000;
+
+  async function stitchFilesToLongImage(files, crops = []) {
+    const list = (files || []).filter((file) => file?.url);
+    if (list.length < 2) throw new Error('至少需要两张图片才能拼接长图。');
+    const images = [];
+    for (let index = 0; index < list.length; index += 1) {
+      const file = list[index];
+      try {
+        images.push({ file, image: await imageFromDataUrl(file.url), crop: crops[index] || { top: 0, bottom: 0 } });
+      } catch (error) {
+        console.warn('跳过无法读取的图片：', file.name, error);
+      }
+    }
+    if (images.length < 2) throw new Error('可读取的图片不足两张，无法拼接。');
+    const targetWidth = Math.max(...images.map((item) => item.image.naturalWidth || item.image.width));
+    const gap = Math.max(8, Math.round(targetWidth * 0.012));
+    const parts = images.map((item) => {
+      const fullHeight = item.image.naturalHeight || item.image.height;
+      const fullWidth = item.image.naturalWidth || item.image.width;
+      const top = Math.max(0, Math.min(Number(item.crop?.top) || 0, fullHeight - 1));
+      const bottom = Math.max(0, Math.min(Number(item.crop?.bottom) || 0, fullHeight - 1 - top));
+      const sourceHeight = Math.max(1, fullHeight - top - bottom);
+      return {
+        image: item.image,
+        sourceTop: top,
+        sourceHeight,
+        sourceWidth: fullWidth,
+        scaledHeight: Math.round((sourceHeight * targetWidth) / fullWidth)
+      };
+    });
+    const totalHeight = parts.reduce((sum, part) => sum + part.scaledHeight, 0) + gap * (parts.length - 1);
+    const scale = totalHeight > STITCH_MAX_SIDE ? STITCH_MAX_SIDE / totalHeight : 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(targetWidth * scale));
+    canvas.height = Math.max(1, Math.round(totalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    let y = 0;
+    parts.forEach((part, index) => {
+      if (index > 0) y += Math.round(gap * scale);
+      const h = Math.round(part.scaledHeight * scale);
+      ctx.drawImage(part.image, 0, part.sourceTop, part.sourceWidth, part.sourceHeight, 0, y, canvas.width, h);
+      y += h;
+    });
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('长图生成失败。');
+    return { file: new File([blob], `长图-${Date.now()}.png`, { type: 'image/png' }), width: canvas.width, height: canvas.height, count: images.length };
+  }
+
+  let stitchLibPromise = null;
+  function loadStitchLib() {
+    if (window.BestNoteStitchLib) return Promise.resolve(window.BestNoteStitchLib);
+    if (stitchLibPromise) return stitchLibPromise;
+    stitchLibPromise = loadExternalScript('./stitch-crop-lib.js', 'stitch-lib')
+      .then(() => {
+        if (!window.BestNoteStitchLib) throw new Error('长图裁剪组件加载失败');
+        return window.BestNoteStitchLib;
+      })
+      .catch((error) => { stitchLibPromise = null; throw error; });
+    return stitchLibPromise;
+  }
+
+  const STITCH_SIGNATURE_BUCKETS = 24;
+
+  function imageToGray(image, targetWidth = 480) {
+    const fullWidth = Math.max(1, image.naturalWidth || image.width);
+    const fullHeight = Math.max(1, image.naturalHeight || image.height);
+    const scale = Math.min(1, targetWidth / fullWidth);
+    const width = Math.max(STITCH_SIGNATURE_BUCKETS, Math.round(fullWidth * scale));
+    const height = Math.max(1, Math.round(fullHeight * (width / fullWidth)));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+    const { data } = ctx.getImageData(0, 0, width, height);
+    const gray = new Uint8ClampedArray(width * height);
+    for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
+      gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    }
+    return { gray, width, height };
+  }
+
+  let stitchDraft = null;
+
+  async function stitchOcrFiles() {
+    const files = state.ocrFiles.map((file) => ({ ...file }));
+    if (files.length < 2) {
+      toast('请先选择两张以上截图，再拼接长图。', 'error');
+      return;
+    }
+    const meta = [];
+    for (const file of files) {
+      try {
+        const image = await imageFromDataUrl(file.url);
+        meta.push({ id: file.id, name: file.name, width: image.naturalWidth || image.width, height: image.naturalHeight || image.height });
+      } catch (error) {
+        meta.push({ id: file.id, name: file.name, width: 0, height: 0 });
+      }
+    }
+    stitchDraft = { files, meta, crops: meta.map(() => ({ top: 0, bottom: 0 })) };
+    renderStitchModal();
+  }
+
+  function renderStitchModal() {
+    if (!stitchDraft) return;
+    const { meta, crops } = stitchDraft;
+    const rows = stitchDraft.files.map((file, index) => {
+      const info = meta[index] || { height: 0 };
+      const maxTop = Math.max(0, Math.round(info.height * 0.4));
+      const crop = crops[index] || { top: 0, bottom: 0 };
+      const kept = Math.max(0, info.height - crop.top - crop.bottom);
+      return `
+        <div class="stitch-row" data-stitch-row="${index}">
+          <span class="stitch-index">${index + 1}</span>
+          <img src="${file.url}" alt="" />
+          <div class="stitch-controls">
+            <strong title="${escapeHtml(info.name || '')}">${escapeHtml((info.name || `图片 ${index + 1}`).slice(0, 24))}</strong>
+            <label>顶部裁剪 <input type="range" min="0" max="${maxTop}" value="${crop.top}" data-stitch-crop="top" data-stitch-index="${index}" /><b data-stitch-readout="top">${crop.top}px</b></label>
+            <label>底部裁剪 <input type="range" min="0" max="${maxTop}" value="${crop.bottom}" data-stitch-crop="bottom" data-stitch-index="${index}" /><b data-stitch-readout="bottom">${crop.bottom}px</b></label>
+            <small>保留 ${info.height}px 中的 <b data-stitch-kept>${kept}</b>px</small>
+          </div>
+        </div>
+      `;
+    }).join('');
+    showModal(`
+      <div class="modal stitch-modal">
+        <h2>拼接长图</h2>
+        <p>多张截图会按列表顺序垂直拼接。可用滑块裁掉每张图重复的状态栏 / 导航栏，也可以让优记自动识别。</p>
+        <div class="stitch-toolbar">
+          <button class="btn secondary small" type="button" id="stitch-auto">自动识别重复区域</button>
+          <button class="btn ghost small" type="button" id="stitch-reset">全部重置</button>
+          <span class="stitch-hint" id="stitch-hint">图片顺序可在识别页用 ↑ ↓ 调整</span>
+        </div>
+        <div class="stitch-list">${rows}</div>
+        <div class="modal-actions">
+          <button class="btn ghost" data-close-modal>取消</button>
+          <button class="btn" id="confirm-stitch">确认拼接</button>
+        </div>
+      </div>
+    `);
+    const update = (index) => {
+      const info = meta[index] || { height: 0 };
+      const crop = crops[index];
+      const row = document.querySelector(`[data-stitch-row="${index}"]`);
+      if (!row) return;
+      row.querySelector('[data-stitch-readout="top"]').textContent = `${crop.top}px`;
+      row.querySelector('[data-stitch-readout="bottom"]').textContent = `${crop.bottom}px`;
+      row.querySelector('[data-stitch-kept]').textContent = Math.max(0, info.height - crop.top - crop.bottom);
+    };
+    document.querySelectorAll('[data-stitch-crop]').forEach((input) => {
+      input.addEventListener('input', () => {
+        const index = Number(input.dataset.stitchIndex);
+        const key = input.dataset.stitchCrop;
+        const other = key === 'top' ? 'bottom' : 'top';
+        const info = meta[index] || { height: 0 };
+        const max = Math.max(0, info.height - 1 - crops[index][other]);
+        crops[index][key] = Math.min(Number(input.value) || 0, max);
+        input.value = crops[index][key];
+        update(index);
+      });
+    });
+    document.getElementById('stitch-reset')?.addEventListener('click', () => {
+      stitchDraft.crops = meta.map(() => ({ top: 0, bottom: 0 }));
+      renderStitchModal();
+    });
+    document.getElementById('stitch-auto')?.addEventListener('click', autoDetectStitchCrops);
+    document.getElementById('confirm-stitch')?.addEventListener('click', confirmStitch);
+  }
+
+  async function autoDetectStitchCrops() {
+    if (!stitchDraft) return;
+    const hint = document.getElementById('stitch-hint');
+    if (hint) hint.textContent = '正在分析重复区域…';
+    try {
+      const lib = await loadStitchLib();
+      const buckets = STITCH_SIGNATURE_BUCKETS;
+      const signatures = [];
+      const heights = [];
+      for (const file of stitchDraft.files) {
+        const image = await imageFromDataUrl(file.url);
+        const { gray, width, height } = imageToGray(image, 480);
+        const rows = lib.rowSignature(gray, width, height, buckets);
+        signatures.push(lib.normalizeSignatures(rows, buckets, height));
+        heights.push(height);
+      }
+      const result = lib.suggestCrops(signatures, heights, buckets, { minRows: 4, maxRows: 200 });
+      stitchDraft.crops = result.crops.map((crop, index) => {
+        const info = stitchDraft.meta[index] || { height: heights[index] };
+        const ratio = info.height / (heights[index] || 1);
+        return { top: Math.round(crop.top * ratio), bottom: Math.round(crop.bottom * ratio) };
+      });
+      const total = result.topRows + result.bottomRows;
+      if (hint) {
+        hint.textContent = total > 0
+          ? `识别到重复顶部 ${result.topRows}px / 底部 ${result.bottomRows}px（可继续手动微调）`
+          : '没有找到明显的重复区域，可手动拖动滑块裁剪';
+      }
+      renderStitchModal();
+      const nextHint = document.getElementById('stitch-hint');
+      if (nextHint && total > 0) nextHint.textContent = `识别到重复顶部 ${result.topRows}px / 底部 ${result.bottomRows}px（可继续手动微调）`;
+    } catch (error) {
+      console.error('自动识别裁剪区域失败：', error);
+      if (hint) hint.textContent = '自动识别失败，请手动裁剪';
+    }
+  }
+
+  async function confirmStitch() {
+    if (!stitchDraft) return;
+    const { files, crops } = stitchDraft;
+    try {
+      toast('正在拼接长图…', 'success');
+      const result = await stitchFilesToLongImage(files, crops);
+      stitchDraft = null;
+      closeModal();
+      clearFiles('ocr');
+      addFiles([result.file], 'ocr');
+      toast(`已拼接 ${result.count} 张图片（${result.width}×${result.height}），可以直接开始识别或保存。`, 'success');
+    } catch (error) {
+      console.error('拼接长图失败：', error);
+      toast(error.message || '拼接长图失败。', 'error');
+    }
+  }
+
+  function moveOcrFile(fileId, direction) {
+    const list = state.ocrFiles;
+    const index = list.findIndex((file) => file.id === fileId);
+    const target = index + Number(direction);
+    if (index < 0 || target < 0 || target >= list.length) return;
+    const [moved] = list.splice(index, 1);
+    list.splice(target, 0, moved);
+    render();
+    toast('已调整拼接顺序。', 'success');
   }
 
   function createSampleOcrImage() {
@@ -3357,6 +3752,11 @@
     try { localStorage.setItem('bestnote-local-engine', state.ocrLocalEngine); } catch (error) { /* ignore */ }
   }
 
+  function setPreciseTable(value) {
+    state.ocrPreciseTable = Boolean(value);
+    try { localStorage.setItem('bestnote-precise-table', state.ocrPreciseTable ? '1' : '0'); } catch (error) { /* ignore */ }
+  }
+
   let onnxOcrLoader = null;
   function loadExternalScript(src, flag) {
     return new Promise((resolve, reject) => {
@@ -3479,21 +3879,18 @@
     const matrix = Array.from({ length: rowCount }, () => Array(columnCount).fill(''));
     let lowConfidenceCells = 0;
 
+    let ran = 0;
     for (const cell of tableCells) {
       let text = '';
-      try {
-        text = await recognizeWithLocalEngine(cell.dataUrl);
-      } catch (error) {
-        console.warn('PaddleOCR-WASM cell recognition failed:', error);
-      }
-      text = cleanOcrPunctuationLine(String(text || '').replace(/\s+/g, ' ')).trim();
-      if (!text && cell.contrastDataUrl) {
+      if (ran < OCR_CELL_MAX_RUNS) {
+        ran += 1;
+        if (lastOcrTiming) lastOcrTiming.cellRuns += 1;
         try {
-          text = await recognizeWithLocalEngine(cell.contrastDataUrl);
-          text = cleanOcrPunctuationLine(String(text || '').replace(/\s+/g, ' ')).trim();
+          text = await recognizeWithLocalEngine(cell.dataUrl);
         } catch (error) {
-          console.warn('PaddleOCR-WASM contrast cell recognition failed:', error);
+          console.warn('本地 OCR 单元格识别失败：', error);
         }
+        text = cleanOcrPunctuationLine(String(text || '').replace(/\s+/g, ' ')).trim();
       }
       matrix[cell.row][cell.column] = text;
       if (!text) lowConfidenceCells += 1;
@@ -3525,7 +3922,9 @@
       const file = files[index];
       if (typeof onProgress === 'function') onProgress(index, file);
       const processedImage = await preprocessImageForOcr(file.url);
+      const ocrStartedAt = performance.now();
       const fullImageText = await recognizeWithLocalEngine(processedImage.rawDataUrl || processedImage.titleDataUrl || processedImage.dataUrl);
+      if (lastOcrTiming) lastOcrTiming.ocrMs += performance.now() - ocrStartedAt;
       if (index === 0) titleText = fullImageText;
 
       const fastTable = parsePaddleJsTableText(fullImageText);
@@ -3686,6 +4085,27 @@
     return count ? total / count : 255;
   }
 
+  const OCR_WORK_MAX_SIDE = 1800;
+  const OCR_TABLE_MAX_CELLS = 36;
+  const OCR_CELL_MAX_RUNS = 24;
+  let lastOcrTiming = null;
+
+  // 采样估算墨迹占比，用来跳过空白单元格
+  function canvasInkRatio(canvas) {
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!canvas.width || !canvas.height) return 0;
+    const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const step = Math.max(1, Math.floor((canvas.width * canvas.height) / 8000));
+    let dark = 0;
+    let count = 0;
+    for (let index = 0; index < data.length; index += 4 * step) {
+      const gray = 0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2];
+      if (gray < 160) dark += 1;
+      count += 1;
+    }
+    return count ? dark / count : 0;
+  }
+
   function createOcrTableCellImages(canvas, rowLines, columnLines) {
     const cells = [];
     const sourceContext = canvas.getContext('2d', { alpha: false });
@@ -3716,6 +4136,8 @@
         contentContext.imageSmoothingQuality = 'high';
         contentContext.drawImage(canvas, left, top, sourceWidth, sourceHeight, 0, 0, scaledWidth, scaledHeight);
 
+        const inkRatio = canvasInkRatio(contentCanvas);
+        if (inkRatio < 0.004) continue; // 空白单元格不必浪费一次 OCR
         const cellCanvas = padOcrCanvas(contentCanvas, padding);
         const contrastCanvas = document.createElement('canvas');
         contrastCanvas.width = cellCanvas.width;
@@ -3725,16 +4147,12 @@
         contrastContext.fillRect(0, 0, contrastCanvas.width, contrastCanvas.height);
         contrastContext.filter = 'contrast(1.8) brightness(1.06)';
         contrastContext.drawImage(cellCanvas, 0, 0);
-        const normalBinaryCanvas = padOcrCanvas(createOtsuOcrVariant(contentCanvas, false), padding);
-        const invertedBinaryCanvas = padOcrCanvas(createOtsuOcrVariant(contentCanvas, true), padding);
         cells.push({
           row,
           column,
-          dataUrl: cellCanvas.toDataURL('image/png'),
-          contrastDataUrl: contrastCanvas.toDataURL('image/png'),
-          normalBinaryDataUrl: normalBinaryCanvas.toDataURL('image/png'),
-          invertedBinaryDataUrl: invertedBinaryCanvas.toDataURL('image/png'),
-          preferInverted: getCanvasAverageLuminance(contentCanvas) < 150
+          inkRatio,
+          dataUrl: cellCanvas.toDataURL('image/jpeg', 0.92),
+          contrastDataUrl: contrastCanvas.toDataURL('image/jpeg', 0.92)
         });
       }
     }
@@ -4117,8 +4535,9 @@
 
         const maxSide = Math.max(width, height);
         let scale = 1;
-        if (maxSide < 1400) scale = Math.min(2, 1800 / maxSide);
-        if (maxSide > 3400) scale = 3200 / maxSide;
+        // Paddle.js 内部会把输入缩放到自己的尺寸；这里再把小图放大只会让识别更慢。
+        if (maxSide < 700) scale = Math.min(1.5, 900 / maxSide);
+        if (maxSide * scale > OCR_WORK_MAX_SIDE) scale = OCR_WORK_MAX_SIDE / maxSide;
 
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(width * scale));
@@ -4130,17 +4549,25 @@
         context.imageSmoothingQuality = 'high';
         context.filter = 'contrast(1.08) saturate(0.92)';
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const rawDataUrl = canvas.toDataURL('image/png');
-        enhanceCanvasForOcr(canvas, context);
-        const titleDataUrl = canvas.toDataURL('image/png');
-        const grid = removeOcrTableGridLines(canvas, context);
-        const tableCells = grid.hasTableGrid && ((grid.rowLines.length - 1) * (grid.columnLines.length - 1) <= 36)
-          ? createOcrTableCellImages(canvas, grid.rowLines, grid.columnLines)
-          : [];
+
+        const startedAt = performance.now();
+        // 只编码一次；PNG 编码在长截图上要几百毫秒，JPEG 快一个数量级且不影响识别
+        const rawDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        let grid = { hasTableGrid: false, rowLines: [], columnLines: [] };
+        let tableCells = [];
+        // 表格逐格精修很慢（每个单元格一次完整 OCR），默认关闭，按需开启
+        if (state.ocrPreciseTable) {
+          enhanceCanvasForOcr(canvas, context);
+          grid = removeOcrTableGridLines(canvas, context);
+          tableCells = grid.hasTableGrid && ((grid.rowLines.length - 1) * (grid.columnLines.length - 1) <= OCR_TABLE_MAX_CELLS)
+            ? createOcrTableCellImages(canvas, grid.rowLines, grid.columnLines)
+            : [];
+        }
+        if (lastOcrTiming) lastOcrTiming.preprocessMs = performance.now() - startedAt;
         resolve({
-          dataUrl: canvas.toDataURL('image/png'),
+          dataUrl: rawDataUrl,
           rawDataUrl,
-          titleDataUrl,
+          titleDataUrl: rawDataUrl,
           hasTableGrid: grid.hasTableGrid,
           grid,
           tableCells
@@ -5635,6 +6062,7 @@
 
   async function runPaddleJsOcrRecognition(files) {
     const startedAt = performance.now();
+    lastOcrTiming = { preprocessMs: 0, ocrMs: 0, cellRuns: 0, images: files.length };
     state.busy = true;
     state.ocrText = '';
     state.ocrTitle = '';
@@ -5670,7 +6098,8 @@
         elapsedMs: performance.now() - startedAt,
         ignoredGraphics: 0,
         tableMeta: batch.results.find((result) => result.tableMeta)?.tableMeta || null,
-        chars: batch.text.length
+        chars: batch.text.length,
+        timing: lastOcrTiming ? { ...lastOcrTiming } : null
       };
       state.ocrTitleSuggestions = generateOcrTitleSuggestions(filterOcrContentLines(batch.titleText || batch.text));
       state.ocrTitle = state.ocrTitleSuggestions[0]?.title || '本地 AI 识别结果';
@@ -6041,9 +6470,21 @@
     return keys;
   }
 
-  function tableMatrixToHtml(matrix, header = true) {
+  function normalizeColumnWidths(values, count) {
+    const list = Array.from({ length: count }, (_, index) => {
+      const value = Number(values?.[index]);
+      return Number.isFinite(value) && value > 0 ? value : 100 / count;
+    });
+    const sum = list.reduce((total, value) => total + value, 0) || 1;
+    return list.map((value) => (value / sum) * 100);
+  }
+
+  function tableMatrixToHtml(matrix, header = true, columnWidths = null) {
     const normalized = ensureTableMatrixShape(matrix || []);
     if (!normalized.length) return '';
+    const columnCount = Math.max(...normalized.map((row) => row.length), 0);
+    const widths = columnWidths && columnWidths.length === columnCount ? normalizeColumnWidths(columnWidths, columnCount) : null;
+    const colgroup = widths ? `<colgroup>${widths.map((value) => `<col style="width:${value.toFixed(2)}%">`).join('')}</colgroup>` : '';
     const renderCell = (cell, tag) => {
       const attributes = [];
       if (cell.colSpan > 1) attributes.push(`colspan="${cell.colSpan}"`);
@@ -6053,10 +6494,10 @@
     const renderRow = (row, tag) => `<tr>${row.map((cell) => cell.hidden ? '' : renderCell(cell, tag)).join('')}</tr>`;
     const head = header && normalized.length ? `<thead>${renderRow(normalized[0], 'th')}</thead>` : '';
     const bodyRows = header ? normalized.slice(1) : normalized;
-    return `<table>${head}<tbody>${bodyRows.map((row) => renderRow(row, 'td')).join('')}</tbody></table>`;
+    return `<table>${colgroup}${head}<tbody>${bodyRows.map((row) => renderRow(row, 'td')).join('')}</tbody></table>`;
   }
 
-  function applyTableToNote(noteId, matrix, header = true) {
+  function applyTableToNote(noteId, matrix, header = true, columnWidths = null) {
     const note = getNoteById(noteId);
     if (!note || !matrix?.length) return;
     const current = document.getElementById('detail-content')?.innerHTML || note.contentHtml;
@@ -6064,7 +6505,7 @@
     const wrapper = documentNode.body.firstElementChild;
     const existing = wrapper.querySelector('table');
     const holder = document.createElement('div');
-    holder.innerHTML = tableMatrixToHtml(matrix, header);
+    holder.innerHTML = tableMatrixToHtml(matrix, header, columnWidths);
     const replacement = holder.firstElementChild;
     if (existing && replacement) existing.replaceWith(replacement);
     else if (replacement) wrapper.appendChild(replacement);
@@ -6082,6 +6523,15 @@
     if (!note) return;
     const current = document.getElementById('detail-content')?.innerHTML || note.contentHtml;
     let matrix = getTableMatrix(current);
+    const readColumnWidths = (html, count) => {
+      const doc = new DOMParser().parseFromString(`<div>${sanitizeHtml(html)}</div>`, 'text/html');
+      const cols = [...(doc.querySelector('table')?.querySelectorAll('colgroup col') || [])];
+      if (cols.length === count) {
+        const parsed = cols.map((col) => Number((col.getAttribute('style') || '').match(/width\s*:\s*([\d.]+)%/)?.[1]));
+        if (parsed.every((value) => Number.isFinite(value) && value > 0)) return normalizeColumnWidths(parsed, count);
+      }
+      return normalizeColumnWidths([], count);
+    };
     let header = true;
     const undoStack = [];
     const redoStack = [];
@@ -6095,6 +6545,7 @@
         ['', '', '']
       ]);
     }
+    let columnWidths = readColumnWidths(current, Math.max(...matrix.map((row) => row.length), 1));
     showModal(`
       <div class="modal table-editor-modal">
         <h2>编辑表格</h2>
@@ -6108,6 +6559,11 @@
           <button class="btn secondary small" id="table-add-column" type="button">＋ 列</button>
           <button class="btn ghost small" id="table-remove-row" type="button">− 末行</button>
           <button class="btn ghost small" id="table-remove-column" type="button">− 末列</button>
+          <span class="table-width-controls">
+            <span class="table-width-label">列宽</span>
+            <button class="btn ghost small" id="table-column-narrow" type="button">所选列变窄</button>
+            <button class="btn ghost small" id="table-column-wide" type="button">所选列变宽</button>
+          </span>
           <label class="merge-delete-option"><input type="checkbox" id="table-first-header" ${header ? 'checked' : ''} /> 首行作为表头</label>
         </div>
         <div class="table-editor-hint"><span id="table-selection-label">拖动或按住 Shift 选择单元格</span><span>合并后会保留左上角及选中区域内的文字</span></div>
@@ -6145,7 +6601,10 @@
     };
     const renderGrid = () => {
       matrix = ensureTableMatrixShape(matrix);
-      grid.innerHTML = matrix.map((row, rowIndex) => `<tr>${row.map((cell, columnIndex) => {
+      const count = Math.max(...matrix.map((row) => row.length), 1);
+      if (columnWidths.length !== count) columnWidths = normalizeColumnWidths(columnWidths, count);
+      const colgroup = `<colgroup>${columnWidths.map((value) => `<col style="width:${value.toFixed(2)}%">`).join('')}</colgroup>`;
+      grid.innerHTML = colgroup + matrix.map((row, rowIndex) => `<tr>${row.map((cell, columnIndex) => {
         if (cell.hidden) return '';
         return `<td class="table-edit-cell" data-cell-key="${rowIndex}:${columnIndex}" data-cell-row="${rowIndex}" data-cell-column="${columnIndex}"><input data-cell-row="${rowIndex}" data-cell-column="${columnIndex}" value="${escapeHtml(cell.text || '')}" aria-label="第${rowIndex + 1}行第${columnIndex + 1}列" /></td>`;
       }).join('')}</tr>`).join('');
@@ -6307,8 +6766,28 @@
     document.getElementById('table-first-header')?.addEventListener('change', (event) => {
       header = Boolean(event.target.checked);
     });
+    const adjustColumnWidth = (delta) => {
+      const count = Math.max(...matrix.map((row) => row.length), 1);
+      const bounds = getSelectedTableBounds(selectedCells);
+      const target = bounds ? bounds.minColumn : 0;
+      if (target < 0 || target >= count) {
+        toast('请先选择要调节宽度的列。', 'error');
+        return;
+      }
+      const next = Math.min(60, Math.max(8, columnWidths[target] + delta));
+      if (Math.abs(next - columnWidths[target]) < 0.01) return;
+      const others = [...Array(count).keys()].filter((index) => index !== target);
+      const otherSum = others.reduce((sum, index) => sum + columnWidths[index], 0) || 1;
+      const updated = columnWidths.slice();
+      updated[target] = next;
+      others.forEach((index) => { updated[index] = (columnWidths[index] / otherSum) * (100 - next); });
+      columnWidths = normalizeColumnWidths(updated, count);
+      renderGrid();
+    };
+    document.getElementById('table-column-narrow')?.addEventListener('click', () => adjustColumnWidth(-5));
+    document.getElementById('table-column-wide')?.addEventListener('click', () => adjustColumnWidth(5));
     document.getElementById('confirm-table-edit')?.addEventListener('click', () => {
-      applyTableToNote(noteId, readMatrixFromGrid(), header);
+      applyTableToNote(noteId, readMatrixFromGrid(), header, columnWidths);
       closeModal();
       toast('表格已更新。', 'success');
     });
@@ -6364,7 +6843,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.23',
+      version: '7.24',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -6813,6 +7292,47 @@
     `);
   }
 
+  const PNG_EXPORT_WIDTHS = [
+    { value: 750, label: '手机 750' },
+    { value: 1080, label: '标准 1080' },
+    { value: 1440, label: '高清 1440' }
+  ];
+  const PNG_EXPORT_RATIOS = [
+    { value: 'auto', label: '自动（按内容）' },
+    { value: '1:1', label: '1:1 方形' },
+    { value: '4:5', label: '4:5 图文' },
+    { value: '3:4', label: '3:4 卡片' },
+    { value: '9:16', label: '9:16 长图' },
+    { value: '16:9', label: '16:9 横屏' }
+  ];
+
+  function openPngExportOptions(noteId) {
+    const note = getNoteById(noteId);
+    if (!note) return;
+    showModal(`
+      <div class="modal png-options-modal">
+        <h2>导出 PNG</h2>
+        <p>选择图片宽度和比例。内容很长时画布会自动加长，不会裁掉文字。</p>
+        <div class="png-option-group">
+          <span class="png-option-label">图片宽度</span>
+          <div class="png-option-row" data-png-width>
+            ${PNG_EXPORT_WIDTHS.map((item, index) => `<button type="button" class="png-chip ${index === 1 ? 'active' : ''}" data-png-width-value="${item.value}">${item.label}</button>`).join('')}
+          </div>
+        </div>
+        <div class="png-option-group">
+          <span class="png-option-label">图片比例</span>
+          <div class="png-option-row" data-png-ratio>
+            ${PNG_EXPORT_RATIOS.map((item, index) => `<button type="button" class="png-chip ${index === 0 ? 'active' : ''}" data-png-ratio-value="${item.value}">${item.label}</button>`).join('')}
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn ghost" data-close-modal>取消</button>
+          <button class="btn" id="confirm-png-export" data-png-note="${escapeHtml(note.id)}">生成 PNG</button>
+        </div>
+      </div>
+    `);
+  }
+
   function exportNote(noteId, format) {
     const note = getNoteById(noteId);
     if (!note) return;
@@ -6829,8 +7349,7 @@
       toast('已打开打印窗口，请选择“另存为 PDF”。', 'success');
       return;
     } else if (format === 'png') {
-      closeModal();
-      exportNotePng(note);
+      openPngExportOptions(note.id);
       return;
     } else {
       downloadBlob(`${safeName}.xls`, htmlToExcel(note), 'application/vnd.ms-excel;charset=utf-8');
@@ -6900,23 +7419,36 @@
     return html2canvasLoader;
   }
 
-  async function exportNotePng(note) {
+  async function exportNotePng(note, options = {}) {
     let host = null;
     try {
       const html2canvas = await loadHtml2Canvas();
+      const targetWidth = Math.min(2000, Math.max(480, Number(options.width) || 1080));
       host = document.createElement('div');
       host.className = 'png-export-host';
       host.innerHTML = buildExportPaperHtml(note);
+      host.style.width = `${targetWidth}px`;
+      host.style.background = '#ffffff';
       document.body.appendChild(host);
+      const target = host.querySelector('.export-note-paper');
+      if (!target) throw new Error('没有找到可导出的笔记内容。');
+      target.style.width = `${targetWidth}px`;
+      target.style.borderRadius = '0';
       await Promise.all([...host.querySelectorAll('img')].map((image) => image.complete ? Promise.resolve() : new Promise((resolve) => {
         image.onload = resolve;
         image.onerror = resolve;
       })));
-      const target = host.querySelector('.export-note-paper');
-      if (!target) throw new Error('没有找到可导出的笔记内容。');
-      const width = Math.max(target.scrollWidth, target.offsetWidth, 1100);
-      const height = Math.max(target.scrollHeight, target.offsetHeight);
-      const canvas = await html2canvas(target, {
+      const contentHeight = Math.max(target.scrollHeight, target.offsetHeight, 1);
+      let height = contentHeight;
+      const ratio = options.ratio && options.ratio !== 'auto' ? String(options.ratio) : null;
+      if (ratio) {
+        const [rw, rh] = ratio.split(':').map(Number);
+        if (rw > 0 && rh > 0) height = Math.max(contentHeight, Math.round((targetWidth * rh) / rw));
+      }
+      host.style.height = `${height}px`;
+      host.style.overflow = 'hidden';
+      const width = targetWidth;
+      const canvas = await html2canvas(host, {
         scale: 2,
         backgroundColor: '#ffffff',
         useCORS: true,
@@ -7325,6 +7857,21 @@
       return;
     }
 
+    if (event.target.closest('[data-workspace-back]')) {
+      goBack();
+      return;
+    }
+
+    if (event.target.closest('[data-workspace-undo]')) {
+      applyWorkspaceUndo('undo');
+      return;
+    }
+
+    if (event.target.closest('[data-workspace-redo]')) {
+      applyWorkspaceUndo('redo');
+      return;
+    }
+
     const rerunOcr = event.target.closest('[data-rerun-ocr]');
     if (rerunOcr) {
       rerunOcrForNote(rerunOcr.dataset.rerunOcr);
@@ -7449,6 +7996,31 @@
       return;
     }
 
+    const pngWidth = event.target.closest('[data-png-width-value]');
+    if (pngWidth) {
+      pngWidth.closest('[data-png-width]')?.querySelectorAll('.png-chip').forEach((chip) => chip.classList.toggle('active', chip === pngWidth));
+      return;
+    }
+
+    const pngRatio = event.target.closest('[data-png-ratio-value]');
+    if (pngRatio) {
+      pngRatio.closest('[data-png-ratio]')?.querySelectorAll('.png-chip').forEach((chip) => chip.classList.toggle('active', chip === pngRatio));
+      return;
+    }
+
+    const pngConfirm = event.target.closest('#confirm-png-export');
+    if (pngConfirm) {
+      const note = getNoteById(pngConfirm.dataset.pngNote);
+      const width = Number(document.querySelector('[data-png-width] .png-chip.active')?.dataset.pngWidthValue) || 1080;
+      const ratio = document.querySelector('[data-png-ratio] .png-chip.active')?.dataset.pngRatioValue || 'auto';
+      closeModal();
+      if (note) {
+        toast('正在生成 PNG…', 'success');
+        exportNotePng(note, { width, ratio });
+      }
+      return;
+    }
+
     const deleteButton = event.target.closest('[data-delete-note]');
     if (deleteButton) {
       openDeleteModal(deleteButton.dataset.deleteNote);
@@ -7541,7 +8113,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.23',
+      version: '7.24',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -7550,6 +8122,8 @@
       buildGeneratedNote: (template, text, title = '') => buildGeneratedNote(template, [{ id: 'test', name: 'test.png' }], text, '', null, title),
       sanitizeHtml,
       matrixToHtml: (matrix) => tableMatrixToHtml(matrix, true),
+      matrixToHtmlWithWidths: (matrix, widths) => tableMatrixToHtml(matrix, true, widths),
+      normalizeColumnWidths,
       matrixFromHtml: (html) => getTableMatrix(html),
       mergeSectionsHtml: (notes) => buildMergedSectionsHtml(notes),
       aiOcrProviders: () => structuredClone(AI_OCR_PROVIDERS),

@@ -1850,7 +1850,7 @@ h1.page-title {
 
 .ocr-file-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-columns: 26px minmax(0, 1fr) auto auto;
   gap: 9px;
   align-items: center;
   min-height: 38px;
@@ -4061,6 +4061,7 @@ body {
 }
 
 .detail-content table {
+  width: 100%;
   max-width: 100%;
   min-width: 0;
   table-layout: fixed;
@@ -5450,3 +5451,135 @@ canvas { max-width: 100%; }
   .ai-enhance-menu { position: fixed; top: 118px; right: 12px; left: 12px; width: auto; }
   .ocr-unavailable { margin: 16px auto; padding: 24px 18px; }
 }
+
+/* ---- v7.23: 返回按钮 ---- */
+.workspace-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.workspace-back:hover { background: var(--surface-muted); }
+
+/* ---- v7.23: 模板折叠 ---- */
+.template-collapse {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+.template-collapse > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.template-collapse > summary::-webkit-details-marker { display: none; }
+.template-collapse > summary::after { content: '⌄'; margin-left: auto; color: var(--ink-faint); transition: transform .15s; }
+.template-collapse[open] > summary::after { transform: rotate(180deg); }
+.template-collapse-label { color: var(--ink-faint); }
+.template-collapse > summary strong { color: var(--ink); font-size: 12.5px; }
+.template-collapse > summary em { font-style: normal; color: var(--ink-faint); font-size: 11px; }
+.template-collapse[open] > summary { border-bottom: 1px solid var(--line); }
+.template-collapse .text-template-grid,
+.template-collapse .template-grid { padding: 12px; }
+
+@media (max-width: 720px) {
+  .workspace-back { min-height: 32px; padding: 0 10px; font-size: 9px; }
+  .template-collapse > summary { padding: 10px 12px; }
+  .template-collapse > summary em { display: none; }
+}
+
+/* ---- v7.23: PNG 导出选项 ---- */
+.png-options-modal { max-width: 540px; }
+.png-option-group { margin-top: 16px; }
+.png-option-label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.png-option-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.png-chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.png-chip:hover { background: var(--surface-muted); }
+.png-chip.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); font-weight: 700; }
+
+/* ---- v7.23: 表格列宽调节 ---- */
+.table-width-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-width-controls .table-width-label { font-size: 11px; color: var(--ink-faint); }
+.table-editor-grid col { transition: width .12s ease; }
+
+/* ---- v7.23: 长图拼接顺序按钮 ---- */
+.ocr-file-order { display: inline-flex; gap: 4px; }
+.ocr-file-order button {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ocr-file-order button:hover:not(:disabled) { background: var(--surface-muted); }
+.ocr-file-order button:disabled { opacity: .35; cursor: not-allowed; }
+.ocr-file-actions .text-link { white-space: nowrap; }
+
+/* ---- v7.24: 拼长图裁剪弹窗 ---- */
+.stitch-modal { max-width: 720px; }
+.stitch-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.stitch-hint { font-size: 12px; color: var(--ink-faint); }
+.stitch-list { display: grid; gap: 10px; max-height: 46vh; overflow-y: auto; padding-right: 4px; }
+.stitch-row {
+  display: grid;
+  grid-template-columns: 22px 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fafcf9;
+}
+.stitch-row img { width: 64px; height: 64px; object-fit: contain; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.stitch-index { font-size: 11px; color: var(--ink-faint); text-align: center; }
+.stitch-controls { display: grid; gap: 4px; min-width: 0; }
+.stitch-controls strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stitch-controls label { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-soft); }
+.stitch-controls input[type="range"] { flex: 1; min-width: 0; }
+.stitch-controls b { font-size: 11px; color: var(--ink); min-width: 46px; text-align: right; }
+.stitch-controls small { font-size: 10.5px; color: var(--ink-faint); }
+@media (max-width: 560px) {
+  .stitch-row { grid-template-columns: 18px 48px minmax(0, 1fr); gap: 7px; }
+  .stitch-row img { width: 48px; height: 48px; }
+  .stitch-controls label { font-size: 10px; }
+}
+
+/* ---- v7.24: 表格逐格精修开关 ---- */
+.precise-table-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.precise-table-toggle input { margin-top: 1px; flex: 0 0 auto; }

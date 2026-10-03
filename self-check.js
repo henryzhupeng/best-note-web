@@ -184,6 +184,20 @@
       }
     },
     {
+      name: '表格列宽可调节并写入笔记',
+      run(api) {
+        const widths = api.normalizeColumnWidths([1, 2, 3], 3);
+        const sum = widths.reduce((total, value) => total + value, 0);
+        assert(Math.abs(sum - 100) < 1e-6, `列宽总和应为 100，实际 ${sum}`);
+        const html = api.matrixToHtmlWithWidths([['A', 'B'], ['1', '2']], [70, 30]);
+        assert(html.includes('<colgroup>'), '缺少 colgroup');
+        assert(/width:70\.00%/.test(html), '缺少第一列宽度');
+        assert(/width:30\.00%/.test(html), '缺少第二列宽度');
+        const plain = api.matrixToHtml([['A', 'B']]);
+        assert(!plain.includes('<colgroup>'), '未指定列宽时不应生成 colgroup');
+      }
+    },
+    {
       name: 'Markdown、PDF 排版、Excel 和纯文本导出结构完整',
       run(api) {
         const note = {
@@ -209,9 +223,9 @@
       }
     },
     {
-      name: '应用版本为 v7.23',
+      name: '应用版本为 v7.24',
       run(api) {
-        assert(api.version === '7.23', `版本为 ${api.version}`);
+        assert(api.version === '7.24', `版本为 ${api.version}`);
       }
     }
   ];
