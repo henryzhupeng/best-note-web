@@ -5242,9 +5242,10 @@ canvas { max-width: 100%; }
 
 .export-note-paper th { background: #f2f4f7; }
 .export-sources { margin-top: 32px; }
-.export-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.export-source-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.export-source-grid img { image-rendering: auto; }
 .export-source-grid figure { margin: 0; padding: 8px; border: 1px solid #e4e7ec; border-radius: 8px; }
-.export-source-grid img { display: block; width: 100%; max-height: 420px; object-fit: contain; border-radius: 6px; }
+.export-source-grid img { display: block; width: 100%; max-height: none; object-fit: contain; border-radius: 6px; }
 .export-source-grid figcaption { margin-top: 5px; color: #667085; font-size: 9px; }
 .export-note-paper footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #e4e7ec; color: #98a2b3; font-size: 9px; }
 /* Mobile topbar: two-row layout, no crowded controls */

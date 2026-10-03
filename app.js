@@ -7482,7 +7482,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.33',
+      version: '7.36',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -8018,13 +8018,43 @@
     `;
   }
 
-  function exportNotePdf(note) {
+  // 原始截图缩略图只有 220px，直接拿去导出会糊；导出前统一换成 IndexedDB 里的原图
+  async function noteAssetObjectUrl(noteId, index) {
+    try {
+      const asset = await getSourceImageAsset(noteId, Number(index));
+      if (!asset?.data) return '';
+      return URL.createObjectURL(new Blob([asset.data], { type: asset.type || 'image/png' }));
+    } catch (error) {
+      console.warn('导出原图读取失败：', error);
+      return '';
+    }
+  }
+
+  async function buildExportPaperHtmlWithAssets(note) {
+    const objectUrls = [];
+    const doc = new DOMParser().parseFromString(`<div>${buildExportPaperHtml(note)}</div>`, 'text/html');
+    const sourceImgs = [...doc.querySelectorAll('.export-source-grid img')];
+    for (const img of doc.querySelectorAll('img')) {
+      const src = img.getAttribute('src') || '';
+      const inlineMatch = src.match(/^assets:\/\/.*-(\d+)$/);
+      const sourceIndex = sourceImgs.indexOf(img);
+      if (!inlineMatch && sourceIndex < 0) continue;
+      const index = inlineMatch ? Number(inlineMatch[1]) : sourceIndex;
+      const url = await noteAssetObjectUrl(note.id, index);
+      if (!url) continue;
+      objectUrls.push(url);
+      img.setAttribute('src', url);
+    }
+    return { html: doc.body.firstElementChild?.innerHTML || '', objectUrls };
+  }
+
+  async function exportNotePdf(note) {
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       toast('浏览器阻止了打印窗口，请允许弹出窗口后重试。', 'error');
       return;
     }
-    const paper = buildExportPaperHtml(note);
+    const { html: paper } = await buildExportPaperHtmlWithAssets(note);
     printWindow.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>${escapeHtml(note.title)}</title><style>
       @page{size:A4;margin:12mm}
       *{box-sizing:border-box}
@@ -8060,12 +8090,15 @@
 
   async function exportNotePng(note, options = {}) {
     let host = null;
+    let exportObjectUrls = [];
     try {
       const html2canvas = await loadHtml2Canvas();
       const targetWidth = Math.min(2000, Math.max(480, Number(options.width) || 1080));
       host = document.createElement('div');
       host.className = 'png-export-host';
-      host.innerHTML = buildExportPaperHtml(note);
+      const exportPaper = await buildExportPaperHtmlWithAssets(note);
+      exportObjectUrls = exportPaper.objectUrls;
+      host.innerHTML = exportPaper.html;
       host.style.width = `${targetWidth}px`;
       host.style.background = '#ffffff';
       document.body.appendChild(host);
@@ -8109,6 +8142,7 @@
       toast(error.message || 'PNG 导出失败。', 'error');
     } finally {
       host?.remove();
+      exportObjectUrls.forEach((url) => URL.revokeObjectURL(url));
     }
   }
 
@@ -8767,7 +8801,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.33',
+      version: '7.36',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),

@@ -1,9 +1,9 @@
-const CACHE_NAME = 'best-note-v7.33';
+const CACHE_NAME = 'best-note-v7.36';
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=7.33',
-  './app.js?v=7.33',
+  './styles.css?v=7.36',
+  './app.js?v=7.36',
   './manifest.json',
   './icon.svg',
   './icon-192.png',
