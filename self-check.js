@@ -223,9 +223,9 @@
       }
     },
     {
-      name: '应用版本为 v7.28',
+      name: '应用版本为 v7.31',
       run(api) {
-        assert(api.version === '7.28', `版本为 ${api.version}`);
+        assert(api.version === '7.31', `版本为 ${api.version}`);
       }
     }
   ];

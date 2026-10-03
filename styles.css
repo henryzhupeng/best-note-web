@@ -5622,3 +5622,32 @@ canvas { max-width: 100%; }
   white-space: nowrap;
 }
 .local-engine-badge::before { content: '●'; color: var(--success); font-size: 8px; }
+
+/* ---- v7.28: 便签正文统一纵向节奏（修掉「上下不统一」） ---- */
+.detail-content > * { margin-top: 0; margin-bottom: 0; }
+.detail-content > * + * { margin-top: 10px; }
+.detail-content > h3 { margin-top: 22px; font-size: 16px; line-height: 1.5; }
+.detail-content > h3:first-child { margin-top: 0; }
+.detail-content > ul,
+.detail-content > ol { padding-left: 22px; }
+.detail-content > p { line-height: 1.85; }
+.detail-content > p + p { margin-top: 10px; }
+
+/* ---- v7.30: 便签正文按行删除 ---- */
+.workspace-content-shell { position: relative; }
+.line-delete-btn {
+  position: absolute;
+  z-index: 3;
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(22, 32, 29, .08);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.line-delete-btn:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
+.line-delete-btn[hidden] { display: none; }

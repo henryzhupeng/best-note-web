@@ -435,6 +435,8 @@
     ocrLocalEngine: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-local-engine') === 'tesseract') ? 'tesseract' : 'onnx',
     ocrTriedEngines: [],
     ocrPreciseTable: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-precise-table') === '1'),
+    ocrFilterUiChrome: !(typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-filter-ui-chrome') === '0'),
+    ocrUiChromeRemoved: 0,
     imageNoteFiles: [],
     imageNoteMode: 'separate',
     imageNoteTitle: '',
@@ -1318,7 +1320,7 @@
           <label class="workspace-folder-select"><span>文件夹</span><select id="detail-folder">${getFolderOptions().filter((folder) => folder !== '全部文件夹').map((folder) => `<option value="${escapeHtml(folder)}" ${folder === (note.folder || '未分类') ? 'selected' : ''}>${escapeHtml(folder)}</option>`).join('')}</select></label>
         </div>
         ${renderNoteSources(note)}
-        <div class="workspace-section-label"><span>识别文字与编辑内容</span><small>${state.workspaceMode === 'markdown' ? 'Markdown 源码' : '可直接编辑'}</small></div>
+        <div class="workspace-section-label"><span>识别文字与编辑内容</span><small>${state.workspaceMode === 'markdown' ? 'Markdown 源码' : '可直接编辑 · 鼠标移到某一行可整行删除'}</small></div>
         ${state.workspaceMode === 'markdown' ? `
           <div class="markdown-editor-grid">
             <textarea class="markdown-source" id="workspace-markdown-source" spellcheck="false" aria-label="Markdown 编辑区">${escapeHtml(markdownSource)}</textarea>
@@ -1329,7 +1331,10 @@
             <button class="btn secondary" type="button" id="save-markdown-note" data-save-markdown-note="${escapeHtml(note.id)}">立即保存</button>
           </div>
         ` : `
-          <div class="detail-content workspace-content" id="detail-content" contenteditable="true">${sanitizeHtml(note.contentHtml)}</div>
+          <div class="workspace-content-shell">
+            <div class="detail-content workspace-content" id="detail-content" contenteditable="true">${sanitizeHtml(note.contentHtml)}</div>
+            <button class="line-delete-btn" id="line-delete-btn" type="button" hidden>× 删除这一行</button>
+          </div>
           <div class="workspace-save-row">
             <span id="workspace-save-status" class="workspace-save-status">已自动保存</span>
             <button class="btn secondary" type="button" data-save-note="${escapeHtml(note.id)}">立即保存</button>
@@ -1893,6 +1898,10 @@
                   </div>
                   <p class="engine-network-note">PP-OCRv4 模型来自 hf-mirror.com，Tesseract 模型来自 cdn.jsdelivr.net。哪个能下载成功就用哪个，识别时会自动切换。</p>
                   <label class="precise-table-toggle">
+                    <input type="checkbox" id="ocr-filter-ui-chrome" ${state.ocrFilterUiChrome ? 'checked' : ''} ${state.busy ? 'disabled' : ''} />
+                    <span>过滤播放器 / 状态栏碎片（时间戳、进度条、画质标签、点赞数、导航按钮）</span>
+                  </label>
+                  <label class="precise-table-toggle">
                     <input type="checkbox" id="ocr-precise-table" ${state.ocrPreciseTable ? 'checked' : ''} ${state.busy ? 'disabled' : ''} />
                     <span>表格逐格精修（更准，但每个单元格都要单独识别一次，明显更慢）</span>
                   </label>
@@ -1977,6 +1986,7 @@
                   <span><strong>${meta.images}</strong> 张图片</span>
                   <span><strong>${isLocalEngine(meta.engine) ? '本地' : `${meta.confidence}%`}</strong> ${isLocalEngine(meta.engine) ? meta.engine : '平均置信度'}</span>
                   <span><strong>${meta.ignoredGraphics || 0}</strong> 忽略图形/噪声行</span>
+                  ${state.ocrUiChromeRemoved ? `<span><strong>${state.ocrUiChromeRemoved}</strong> 忽略界面碎片行</span>` : ''}
                   ${meta.tableMeta ? `
                     <span><strong>${meta.tableMeta.rows}×${meta.tableMeta.columns}</strong> 表格行列</span>
                     <span><strong>${meta.tableMeta.lowConfidenceCells}</strong> 待核对单元格</span>
@@ -3050,6 +3060,14 @@
       toast(`本地识别引擎已切换为 ${localEngineLabel()}。`, 'success');
     });
 
+    const filterUiChromeToggle = document.getElementById('ocr-filter-ui-chrome');
+    if (filterUiChromeToggle) filterUiChromeToggle.addEventListener('change', (event) => {
+      setFilterUiChrome(event.target.checked);
+      rebuildOcrBlocks();
+      render();
+      toast(event.target.checked ? '已开启界面碎片过滤。' : '已关闭界面碎片过滤。', 'success');
+    });
+
     const preciseTableToggle = document.getElementById('ocr-precise-table');
     if (preciseTableToggle) preciseTableToggle.addEventListener('change', (event) => {
       setPreciseTable(event.target.checked);
@@ -3179,6 +3197,21 @@
       if (!element) return;
       element.addEventListener('input', scheduleWorkspaceAutosave);
     });
+    const lineDeleteShell = document.querySelector('.workspace-content-shell');
+    if (lineDeleteShell) {
+      lineDeleteShell.addEventListener('mousemove', positionLineDeleteButton);
+      lineDeleteShell.addEventListener('mouseleave', hideLineDeleteButton);
+    }
+    const lineDeleteButton = document.getElementById('line-delete-btn');
+    if (lineDeleteButton) {
+      lineDeleteButton.addEventListener('mousedown', (event) => event.preventDefault());
+      lineDeleteButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteWorkspaceBlock(lineDeleteTarget);
+      });
+    }
+
     const detailContent = document.getElementById('detail-content');
     if (detailContent) {
       if (workspaceUndo.noteId !== state.noteId) resetWorkspaceUndo(detailContent.innerHTML);
@@ -4011,6 +4044,11 @@
   function setLocalEngine(value) {
     state.ocrLocalEngine = value === 'tesseract' ? 'tesseract' : 'onnx';
     try { localStorage.setItem('bestnote-local-engine', state.ocrLocalEngine); } catch (error) { /* ignore */ }
+  }
+
+  function setFilterUiChrome(value) {
+    state.ocrFilterUiChrome = Boolean(value);
+    try { localStorage.setItem('bestnote-filter-ui-chrome', state.ocrFilterUiChrome ? '1' : '0'); } catch (error) { /* ignore */ }
   }
 
   function setPreciseTable(value) {
@@ -5100,13 +5138,33 @@
     if (/^[0-9\s.,%％￥$:：-]+$/.test(text)) return false;
     const digitCount = (text.match(/\d/g) || []).length;
     if (digitCount / Math.max(length, 1) > 0.35) return false;
+    // 1) 固定小标题词表
     if (isLikelyOcrHeadingLine(text)) return true;
+    // 2) 以冒号结尾，例如「会议目标：」
     if (/[：:]$/.test(String(value).trim())) return true;
-    if (length <= 12 && !/[：:]/.test(text)) {
-      const previousBlank = index === 0 || !String(lines[index - 1] || '').trim();
-      if (previousBlank) return true;
+    // 3) 短行 + 下一行明显更长 —— 典型的小标题结构（同一行在相同上下文里结果一致）
+    if (length <= 14) {
+      const next = stripOcrListMarker(String(lines[index + 1] || '').trim());
+      const nextLength = [...next].length;
+      if (next && nextLength >= length + 8) return true;
+      // 4) 文档第一行
+      if (index === 0) return true;
     }
     return false;
+  }
+
+  // 同一段文字被识别成多段（截图上下重复、拼接重叠）时只保留第一次出现，
+  // 避免预览里同一个标题在上下出现两次、看起来忽大忽小。
+  function dedupeOcrBlocks(blocks) {
+    const seen = new Set();
+    return (blocks || []).filter((block) => {
+      if (block.type !== 'heading' && block.type !== 'paragraph') return true;
+      const key = String(block.text || '').replace(/\s+/g, '');
+      if (key.length < 8) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   function getOcrTableCandidate(value, forceTable = false) {
@@ -5221,7 +5279,7 @@
       index += 1;
     }
     flushList();
-    return blocks;
+    return dedupeOcrBlocks(blocks);
   }
 
   function blocksToHtml(blocks) {
@@ -5471,6 +5529,40 @@
     return values.every((value, index) => index === 0 || value > values[index - 1]);
   }
 
+  // 播放器 / 状态栏的界面碎片：时间戳、进度条、画质标签、互动计数、导航按钮。
+  // 只识别「单独成行」的界面元素，正文里的数字（年份、金额、组数）不会命中。
+  function isOcrUiChromeLine(value) {
+    const line = String(value || '').trim();
+    if (!line) return false;
+    const compact = line.replace(/\s+/g, '');
+    if (!compact) return false;
+
+    // 纯时间 / 时间范围：00:25、1:02:33、00:25/03:10
+    if (/^[-+]?\d{1,2}[:：]\d{2}(?:[:：]\d{2})?(?:[/|]\d{1,2}[:：]\d{2}(?:[:：]\d{2})?)?$/.test(compact)) return true;
+    // 秒数标记：02542" / ~02544" / 42″
+    if (/^[~\-]?\d{1,3}\d{1,2}["'′″]$/.test(compact)) return true;
+    // 进度条 / 分隔线碎片
+    if (/^[=—\-–_·•●○▬▭▰▱]{4,}$/.test(compact)) return true;
+    if (/^\d{1,2}[:：]\d{2}[\-–—=·•●▬▰]{3,}/.test(compact)) return true;
+    // 画质 / 功能标签
+    if (/^(?:\d{3,4}[PpKk]|HD|SD|4K|HDR|杜比|Dolby)$/.test(compact)) return true;
+    if (/^(?:倍速|全屏|小窗|自动连播|字幕|弹幕|发送|关注|已关注|推荐|热门|投币|收藏|分享|缓存|下载|清晰度|选集|登录|打开APP|看视频|展开|收起|更多|设置)$/.test(compact)) return true;
+    // 互动计数：192、1.2万、3,456、12w、1.1亿（4 位年份放行）
+    if (/^\d+(?:[.,]\d+)?(?:万|亿|w|W|k|K)$/.test(compact)) return true;
+    if (/^\d{1,3}(?:[.,]\d{3})*$/.test(compact)) return true;
+    if (/^\d{5,}$/.test(compact)) return true;
+    if (/^(?:点赞|弹幕|评论|收藏|投币|转发|浏览|阅读|播放|观看)\s*[\d.,]+(?:万|亿|w|k)?$/i.test(compact)) return true;
+    // 纯 @ 账号
+    if (/^@[\w.\-]{2,}$/.test(compact)) return true;
+    return false;
+  }
+
+  function dropOcrUiChromeLines(text) {
+    const lines = String(text || '').split('\n');
+    const kept = lines.filter((line) => !isOcrUiChromeLine(line));
+    return { text: kept.join('\n'), removed: lines.length - kept.length };
+  }
+
   function cleanOcrIrrelevantLine(value) {
     let line = String(value || '').trim();
     const segments = [...line.matchAll(/[\u3400-\u9fff]{3,}/g)];
@@ -5561,7 +5653,10 @@
   function buildBlocksForText(text, options = {}) {
     const renderMode = options.renderMode || 'auto';
     const filterIrrelevant = options.filterIrrelevant !== false;
-    if (!String(text || '').trim()) return [];
+    const filterUiChrome = options.filterUiChrome === true;
+    const sourceInput = filterUiChrome ? dropOcrUiChromeLines(text).text : text;
+    if (!String(sourceInput || '').trim()) return [];
+    text = sourceInput;
 
     const markdownBlocks = parseMarkdownToOcrBlocks(text);
     const hasMarkdownTable = markdownBlocks.some((block) => block.type === 'table');
@@ -5583,9 +5678,12 @@
   }
 
   function rebuildOcrBlocks() {
-    state.ocrBlocks = buildBlocksForText(state.ocrText, {
+    const uiChrome = state.ocrFilterUiChrome ? dropOcrUiChromeLines(state.ocrText) : { text: state.ocrText, removed: 0 };
+    state.ocrUiChromeRemoved = uiChrome.removed;
+    state.ocrBlocks = buildBlocksForText(uiChrome.text, {
       renderMode: state.ocrRenderMode,
-      filterIrrelevant: state.ocrFilterIrrelevant
+      filterIrrelevant: state.ocrFilterIrrelevant,
+      filterUiChrome: state.ocrFilterUiChrome
     });
     state.ocrDraftHtml = renderOcrBlockPreview(state.ocrBlocks);
   }
@@ -6571,6 +6669,47 @@
     }
   }
 
+  // 悬停到某一行时显示「删除这一行」，方便手动清理播放器字幕、界面对话框等噪声。
+  let lineDeleteTarget = null;
+
+  function deleteWorkspaceBlock(node) {
+    const content = document.getElementById('detail-content');
+    if (!content || !node || node.parentElement !== content) return;
+    const before = content.innerHTML;
+    node.remove();
+    const after = content.innerHTML;
+    workspaceUndo.stack.push(before);
+    if (workspaceUndo.stack.length > 60) workspaceUndo.stack.shift();
+    workspaceUndo.redo.length = 0;
+    workspaceUndo.last = after;
+    syncWorkspaceUndoButtons();
+    scheduleWorkspaceAutosave();
+    hideLineDeleteButton();
+    toast('已删除这一行，可用「↶ 撤销」恢复。', 'success');
+  }
+
+  function hideLineDeleteButton() {
+    const button = document.getElementById('line-delete-btn');
+    if (button) button.hidden = true;
+    lineDeleteTarget = null;
+  }
+
+  function positionLineDeleteButton(event) {
+    const content = document.getElementById('detail-content');
+    const button = document.getElementById('line-delete-btn');
+    if (!content || !button || !content.contains(event.target)) return hideLineDeleteButton();
+    let node = event.target;
+    while (node && node.parentElement !== content) node = node.parentElement;
+    if (!node || node.parentElement !== content) return hideLineDeleteButton();
+    const shell = button.parentElement;
+    const shellRect = shell.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    button.hidden = false;
+    button.style.top = `${Math.max(0, nodeRect.top - shellRect.top - 2)}px`;
+    button.style.right = '0px';
+    lineDeleteTarget = node;
+  }
+
   async function copyOcrText() {
     const text = stripHtml(document.getElementById('ocr-preview-body')?.innerHTML || state.ocrDraftHtml) || document.getElementById('ocr-text')?.value || state.ocrText;
     if (!text) {
@@ -7231,7 +7370,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.28',
+      version: '7.31',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -8516,7 +8655,7 @@
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.28',
+      version: '7.31',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -8528,6 +8667,10 @@
       matrixToHtmlWithWidths: (matrix, widths) => tableMatrixToHtml(matrix, true, widths),
       normalizeColumnWidths,
       collapseCjkSpaces,
+      dedupeOcrBlocks,
+      isOcrUiChromeLine,
+      dropOcrUiChromeLines,
+      isOcrStructuredHeading,
       matrixFromHtml: (html) => getTableMatrix(html),
       mergeSectionsHtml: (notes) => buildMergedSectionsHtml(notes),
       aiOcrProviders: () => structuredClone(AI_OCR_PROVIDERS),
