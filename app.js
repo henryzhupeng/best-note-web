@@ -434,6 +434,13 @@
     ocrEngine: 'paddlejs',
     ocrLocalEngine: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-local-engine') === 'onnx') ? 'onnx' : 'paddlejs',
     ocrPreciseTable: (typeof localStorage !== 'undefined' && localStorage.getItem('bestnote-precise-table') === '1'),
+    imageNoteFiles: [],
+    imageNoteMode: 'separate',
+    imageNoteTitle: '',
+    imageNoteTags: '',
+    imageNoteFolder: '未分类',
+    imageNoteBody: '',
+    imageNoteCrops: [],
     ocrReturnNoteId: null,
     workspaceCursorBlockIndex: null,
     navHistory: [],
@@ -1107,6 +1114,7 @@
     if (state.route === 'import') root.innerHTML = renderImport();
     if (state.route === 'ocr') root.innerHTML = renderOcr();
     if (state.route === 'paste') root.innerHTML = renderPaste();
+    if (state.route === 'images') root.innerHTML = renderImageNotes();
     if (state.route === 'examples') root.innerHTML = renderExamples();
     if (state.route === 'backup') root.innerHTML = renderBackup();
     if (state.route === 'history') {
@@ -1267,8 +1275,9 @@
           <h1>开始记录</h1>
           <p>上传图片提取文字，或直接粘贴外部 OCR / AI 结果。</p>
           <div class="workspace-empty-actions">
-            <button class="btn" type="button" data-route="ocr">上传图片</button>
-            <button class="btn secondary" type="button" data-route="paste">粘贴文字</button>
+            <button class="btn" type="button" data-route="paste">粘贴文字建笔记</button>
+            <button class="btn secondary" type="button" data-route="images">直接放截图</button>
+            <button class="btn secondary" type="button" data-route="ocr">图片提取文字</button>
           </div>
         </div>
       `;
@@ -1299,7 +1308,7 @@
       <label class="workspace-image-dropzone" id="workspace-dropzone">
         <input id="workspace-image-input" type="file" accept="image/*" multiple />
         <span class="workspace-upload-icon">＋</span>
-        <span><strong>拖拽图片到这里，或点击上传</strong><small>单张或批量截图都可以；识别后图片和文字分区展示</small></span>
+        <span><strong>拖拽图片到这里，或点击上传</strong><small>默认会识别文字；只想存档截图就走 <a href="#" data-route="images">图片笔记</a></small></span>
       </label>
       <article class="workspace-paper">
         <input class="workspace-title-input" id="detail-title" value="${escapeHtml(note.title)}" aria-label="笔记标题" />
@@ -1350,6 +1359,7 @@
           <p>免注册 · 本地存储。无论文字来自图片 OCR、苹果备忘录还是豆包/Kimi/ChatGPT，都可以自动提炼大纲、错题、参数表、阅读摘要和会议行动项。</p>
           <div class="hero-actions">
             <button class="btn" data-route="paste">开始 AI 结构化</button>
+            <button class="btn secondary" data-route="images">直接存图片笔记</button>
             <button class="btn secondary" data-route="ocr">图片提取文字</button>
             <button class="btn secondary" data-route="examples">查看示例</button>
           </div>
@@ -1856,7 +1866,7 @@
       `;
     }
     return `
-      ${pageHeader('Screenshot Organizer', '截图智能整理', 'PaddleOCR-WASM 在浏览器本地识别，识别后可编辑、重排和保存。', `<div class="page-head-actions"><span class="step">本地识别 → 编辑 → 保存</span><span class="status-badge ready">● ${engineLabel}</span>${aiEnhanceDropdown()}<a class="btn secondary small" href="./ocr-ab-test.html" target="_blank" rel="noopener">A/B 对比</a><button class="btn secondary small" data-route="paste">粘贴 AI 结果</button></div>`)}
+      ${pageHeader('Screenshot Organizer', '截图智能整理', 'PaddleOCR-WASM 在浏览器本地识别，识别后可编辑、重排和保存。', `<div class="page-head-actions"><span class="step">本地识别 → 编辑 → 保存</span><span class="status-badge ready">● ${engineLabel}</span>${aiEnhanceDropdown()}<a class="btn secondary small" href="./ocr-ab-test.html" target="_blank" rel="noopener">A/B 对比</a><button class="btn secondary small" data-route="images">只存图片不识别</button><button class="btn secondary small" data-route="paste">粘贴 AI 结果</button></div>`)}
       ${recognitionAdviceBanner()}
       <div class="workspace-grid">
         <section class="panel">
@@ -1944,6 +1954,7 @@
 
             <div class="action-row">
               <span class="helper-note">ⓘ 本地 AI 识别图片文字；手写、模糊图片可使用 AI 增强识别兜底。</span>
+              <button class="btn ghost" id="self-test-ocr" type="button" ${state.busy ? 'disabled' : ''} title="用一张内置测试图验证本地识别引擎是否正常">引擎自检</button>
               <button class="btn" id="run-ocr" ${state.busy || !files.length ? 'disabled' : ''}>${state.busy ? '本地 AI 识别图片文字…' : `开始识别${files.length ? ` · ${files.length} 张` : ''}`}</button>
             </div>
           </div>
@@ -2192,6 +2203,168 @@
     return state.templatePanelOpen;
   }
 
+  function renderImageNotes() {
+    const files = state.imageNoteFiles;
+    const today = formatDate(new Date(), true);
+    const defaultTitle = `图片笔记 · ${today}`;
+    return `
+      ${pageHeader(
+        'Image Note',
+        '图片笔记',
+        '不想识别文字时，直接把一张或多张截图存成一条笔记；也可以拼成一张长图再存。',
+        '<div class="page-head-actions"><button class="btn secondary small" data-route="ocr">去识别文字</button><button class="btn secondary small" data-route="paste">粘贴文字建笔记</button></div>'
+      )}
+      <div class="workspace-grid">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>1. 选择截图</h2>
+            <span class="step">支持多选 · 最多 ${MAX_FILES} 张</span>
+          </div>
+          <div class="panel-body">
+            <div class="mobile-import-inline">
+              <span>快捷导入</span>
+              <button class="btn secondary small" type="button" data-paste-image-images>⇩ 粘贴截图</button>
+              <button class="btn secondary small" type="button" data-images-pick>▧ 从相册选择</button>
+            </div>
+            <label class="dropzone compact" id="images-dropzone">
+              <input id="images-file-input" type="file" accept="image/*" multiple ${state.busy ? 'disabled' : ''} />
+              <span class="dropzone-icon">＋</span>
+              <span>
+                <strong>把截图拖进来，或点击选择</strong>
+                <p>整页截图、聊天记录、课件、表格都可以；不识别文字也能直接存</p>
+              </span>
+            </label>
+            <div class="upload-grid" id="images-upload-grid">
+              ${renderUploads(files, 'images')}
+            </div>
+            ${files.length ? `
+              <div class="ocr-file-actions">
+                <span>已选择 ${files.length} 张图片</span>
+                <button class="text-link" id="images-stitch-crop" type="button" ${files.length < 2 ? 'disabled' : ''}>裁剪重复区域</button>
+                <button class="text-link" id="clear-images-files" type="button">清空全部图片</button>
+              </div>
+              <div class="ocr-file-list" id="images-file-list">
+                ${files.map((file, index) => {
+                  const crop = state.imageNoteCrops[index] || { top: 0, bottom: 0 };
+                  const cropLabel = crop.top || crop.bottom ? `裁剪 上${crop.top}px / 下${crop.bottom}px` : '未裁剪';
+                  return `
+                    <div class="ocr-file-row" data-images-row="${escapeHtml(file.id)}">
+                      <span class="ocr-file-index">${index + 1}</span>
+                      <span class="ocr-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                      <span class="ocr-file-status">${cropLabel}</span>
+                      <span class="ocr-file-order">
+                        <button type="button" data-images-move="${escapeHtml(file.id)}" data-images-move-dir="-1" ${index === 0 ? 'disabled' : ''} title="上移">↑</button>
+                        <button type="button" data-images-move="${escapeHtml(file.id)}" data-images-move-dir="1" ${index === files.length - 1 ? 'disabled' : ''} title="下移">↓</button>
+                      </span>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+              <div class="image-note-mode">
+                <span class="form-label">保存方式</span>
+                <label><input type="radio" name="image-note-mode" value="separate" ${state.imageNoteMode !== 'long' ? 'checked' : ''} /> 保留多张原图（每张都能单独放大查看）</label>
+                <label><input type="radio" name="image-note-mode" value="long" ${state.imageNoteMode === 'long' ? 'checked' : ''} ${files.length < 2 ? 'disabled' : ''} /> 拼成一张长图（适合连续截图）</label>
+              </div>
+            ` : `
+              <div class="preview-placeholder compact">
+                <div>
+                  <span class="preview-illustration">🖼</span>
+                  <h3>还没有选择截图</h3>
+                  <p>选好图片后可以直接保存为笔记，不需要识别文字。</p>
+                </div>
+              </div>
+            `}
+          </div>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-header">
+            <h2>2. 笔记信息</h2>
+            <span class="result-count">${files.length ? `${files.length} 张截图` : '等待选择'}</span>
+          </div>
+          <div class="panel-body">
+            <label class="generated-field">
+              <span>标题</span>
+              <input id="images-note-title" value="${escapeHtml(state.imageNoteTitle)}" placeholder="${escapeHtml(defaultTitle)}" aria-label="图片笔记标题" />
+            </label>
+            <label class="generated-field">
+              <span>标签</span>
+              <input id="images-note-tags" value="${escapeHtml(state.imageNoteTags)}" placeholder="标签，用逗号分隔" aria-label="图片笔记标签" />
+            </label>
+            <label class="generated-field">
+              <span>文件夹</span>
+              <span class="folder-picker-row">
+                <select id="images-note-folder" aria-label="保存到文件夹">
+                  ${getFolderOptions().filter((folder) => folder !== '全部文件夹').map((folder) => `<option value="${escapeHtml(folder)}" ${folder === (state.imageNoteFolder || '未分类') ? 'selected' : ''}>${escapeHtml(folder)}</option>`).join('')}
+                </select>
+                <button class="text-link" type="button" data-new-folder-context="images">＋ 新建</button>
+              </span>
+            </label>
+            <label class="generated-field">
+              <span>正文（可留空）</span>
+              <textarea id="images-note-body" class="paste-textarea compact" spellcheck="false" placeholder="不想写就留空，只保存截图。">${escapeHtml(state.imageNoteBody)}</textarea>
+            </label>
+            <div class="action-row">
+              <span class="helper-note">图片只保存在当前浏览器，可用数据备份导出。</span>
+              <button class="btn" id="save-image-note" ${files.length ? '' : 'disabled'}>保存为笔记</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    `;
+  }
+
+  async function saveImageNote() {
+    const files = state.imageNoteFiles;
+    if (!files.length) {
+      toast('请先选择至少一张截图。', 'error');
+      return;
+    }
+    const title = (document.getElementById('images-note-title')?.value || '').trim()
+      || `图片笔记 · ${formatDate(new Date(), true)}`;
+    const rawTags = (document.getElementById('images-note-tags')?.value || '')
+      .split(/[,，]/).map((tag) => tag.trim().replace(/^#/, '')).filter(Boolean);
+    const folder = document.getElementById('images-note-folder')?.value || state.imageNoteFolder || '未分类';
+    const bodyText = (document.getElementById('images-note-body')?.value || '').trim();
+
+    let fileEntries = files.map((entry) => entry.file).filter(Boolean);
+    try {
+      if (state.imageNoteMode === 'long' && files.length > 1) {
+        toast('正在拼接长图…', 'success');
+        const stitched = await stitchFilesToLongImage(files, state.imageNoteCrops);
+        fileEntries = [stitched.file];
+      }
+    } catch (error) {
+      console.error('拼接长图失败：', error);
+      toast(error.message || '拼接长图失败，已改为保存多张原图。', 'error');
+      fileEntries = files.map((entry) => entry.file).filter(Boolean);
+    }
+
+    const contentHtml = bodyText ? blocksToHtml(structureOcrContent(bodyText)) : '';
+    const note = {
+      id: `note-${Date.now()}`,
+      title,
+      folder,
+      tags: rawTags.length ? [...new Set(rawTags)] : ['图片笔记'],
+      contentHtml,
+      summary: bodyText ? bodyText.slice(0, 110) : `${fileEntries.length} 张截图`,
+      sourceImages: [],
+      updatedAt: new Date().toISOString()
+    };
+    state.notes.unshift(note);
+    persist({ reason: '保存图片笔记' });
+    if (state.imageNoteKeepSources !== false) attachSourceImagesInBackground(note, fileEntries);
+    state.imageNoteFiles.forEach((entry) => URL.revokeObjectURL(entry.url));
+    state.imageNoteFiles = [];
+    state.imageNoteTitle = '';
+    state.imageNoteTags = '';
+    state.imageNoteBody = '';
+    state.imageNoteCrops = [];
+    state.imageNoteMode = 'separate';
+    navigate('workspace', { noteId: note.id });
+    toast('图片笔记已保存。', 'success');
+  }
+
   function renderPaste() {
     const parsed = state.pasteParsed;
     const suspiciousCount = countSuspiciousOcrCells(state.pasteBlocks);
@@ -2200,7 +2373,7 @@
         'AI Structuring',
         'AI 结构化整理',
         '粘贴任意 OCR 或 AI 识别结果，选择模板后自动提炼大纲、错题、参数表、阅读摘要或会议行动项。',
-        '<button class="btn secondary" data-route="ocr">← 图片提取文字</button>'
+        '<div class="page-head-actions"><button class="btn secondary" data-route="ocr">← 图片提取文字</button><button class="btn secondary" data-route="images">直接放截图</button></div>'
       )}
       <div class="paste-workspace">
         <section class="panel">
@@ -2817,11 +2990,46 @@
     bindDropzone(document.getElementById('ai-dropzone'), 'ai');
     bindDropzone(document.getElementById('ocr-dropzone'), 'ocr');
 
+    const imagesInput = document.getElementById('images-file-input');
+    if (imagesInput) imagesInput.addEventListener('change', (event) => {
+      const picked = [...event.target.files].filter((file) => file.type.startsWith('image/'));
+      if (picked.length) addFiles(picked, 'images');
+      event.target.value = '';
+    });
+    bindDropzone(document.getElementById('images-dropzone'), 'images');
+
+    document.querySelectorAll('[data-images-move]').forEach((button) => {
+      button.addEventListener('click', () => moveListEntry('imageNoteFiles', button.dataset.imagesMove, button.dataset.imagesMoveDir, '已调整图片顺序。'));
+    });
+
+    const clearImagesFiles = document.getElementById('clear-images-files');
+    if (clearImagesFiles) clearImagesFiles.addEventListener('click', () => {
+      clearFiles('images');
+      state.imageNoteCrops = [];
+      render();
+    });
+
+    const imagesStitchCrop = document.getElementById('images-stitch-crop');
+    if (imagesStitchCrop) imagesStitchCrop.addEventListener('click', openImageNoteCrop);
+
+    document.querySelectorAll('input[name="image-note-mode"]').forEach((input) => {
+      input.addEventListener('change', (event) => {
+        state.imageNoteMode = event.target.value;
+        render();
+      });
+    });
+
+    const saveImageNoteButton = document.getElementById('save-image-note');
+    if (saveImageNoteButton) saveImageNoteButton.addEventListener('click', saveImageNote);
+
     const runAi = document.getElementById('run-ai');
     if (runAi) runAi.addEventListener('click', runAiOrganize);
 
     const runOcr = document.getElementById('run-ocr');
     if (runOcr) runOcr.addEventListener('click', runOcrRecognition);
+
+    const selfTestOcr = document.getElementById('self-test-ocr');
+    if (selfTestOcr) selfTestOcr.addEventListener('click', runLocalEngineSelfTest);
 
     document.querySelectorAll('[data-template-collapse]').forEach((element) => {
       element.addEventListener('toggle', () => { state.templatePanelOpen = element.open; });
@@ -3065,12 +3273,7 @@
 
   let stitchDraft = null;
 
-  async function stitchOcrFiles() {
-    const files = state.ocrFiles.map((file) => ({ ...file }));
-    if (files.length < 2) {
-      toast('请先选择两张以上截图，再拼接长图。', 'error');
-      return;
-    }
+  async function prepareStitchDraft(files, target, presetCrops = null) {
     const meta = [];
     for (const file of files) {
       try {
@@ -3080,8 +3283,29 @@
         meta.push({ id: file.id, name: file.name, width: 0, height: 0 });
       }
     }
-    stitchDraft = { files, meta, crops: meta.map(() => ({ top: 0, bottom: 0 })) };
+    const crops = presetCrops && presetCrops.length === files.length
+      ? presetCrops.map((crop) => ({ top: Number(crop?.top) || 0, bottom: Number(crop?.bottom) || 0 }))
+      : meta.map(() => ({ top: 0, bottom: 0 }));
+    stitchDraft = { files, meta, crops, target };
     renderStitchModal();
+  }
+
+  async function stitchOcrFiles() {
+    const files = state.ocrFiles.map((file) => ({ ...file }));
+    if (files.length < 2) {
+      toast('请先选择两张以上截图，再拼接长图。', 'error');
+      return;
+    }
+    await prepareStitchDraft(files, 'ocr');
+  }
+
+  async function openImageNoteCrop() {
+    const files = state.imageNoteFiles.map((file) => ({ ...file }));
+    if (files.length < 2) {
+      toast('请先选择两张以上截图，再裁剪拼接区域。', 'error');
+      return;
+    }
+    await prepareStitchDraft(files, 'images', state.imageNoteCrops);
   }
 
   function renderStitchModal() {
@@ -3108,7 +3332,7 @@
     showModal(`
       <div class="modal stitch-modal">
         <h2>拼接长图</h2>
-        <p>多张截图会按列表顺序垂直拼接。可用滑块裁掉每张图重复的状态栏 / 导航栏，也可以让优记自动识别。</p>
+        <p>多张截图会按列表顺序垂直拼接。可用滑块裁掉每张图重复的状态栏 / 导航栏，也可以让优记自动识别。${stitchDraft?.target === 'images' ? '（裁剪结果会在保存图片笔记时应用）' : ''}</p>
         <div class="stitch-toolbar">
           <button class="btn secondary small" type="button" id="stitch-auto">自动识别重复区域</button>
           <button class="btn ghost small" type="button" id="stitch-reset">全部重置</button>
@@ -3189,7 +3413,16 @@
 
   async function confirmStitch() {
     if (!stitchDraft) return;
-    const { files, crops } = stitchDraft;
+    const { files, crops, target } = stitchDraft;
+    if (target === 'images') {
+      state.imageNoteCrops = crops.map((crop) => ({ ...crop }));
+      state.imageNoteMode = 'long';
+      stitchDraft = null;
+      closeModal();
+      render();
+      toast('已记录裁剪区域；保存笔记时会按这个顺序拼成一张长图。', 'success');
+      return;
+    }
     try {
       toast('正在拼接长图…', 'success');
       const result = await stitchFilesToLongImage(files, crops);
@@ -3204,15 +3437,22 @@
     }
   }
 
-  function moveOcrFile(fileId, direction) {
-    const list = state.ocrFiles;
+  function moveListEntry(key, fileId, direction, message) {
+    const list = state[key];
+    if (!Array.isArray(list)) return;
     const index = list.findIndex((file) => file.id === fileId);
     const target = index + Number(direction);
     if (index < 0 || target < 0 || target >= list.length) return;
     const [moved] = list.splice(index, 1);
     list.splice(target, 0, moved);
+    // 顺序变了，之前的裁剪值不再对应，重置避免错位
+    if (key === 'imageNoteFiles') state.imageNoteCrops = [];
     render();
-    toast('已调整拼接顺序。', 'success');
+    toast(message || '已调整顺序。', 'success');
+  }
+
+  function moveOcrFile(fileId, direction) {
+    moveListEntry('ocrFiles', fileId, direction, '已调整拼接顺序。');
   }
 
   function createSampleOcrImage() {
@@ -3267,7 +3507,7 @@
       toast('请选择 JPG、PNG 或 WEBP 图片。', 'error');
       return;
     }
-    const key = purpose === 'ai' ? 'importFiles' : 'ocrFiles';
+    const key = purpose === 'ai' ? 'importFiles' : (purpose === 'images' ? 'imageNoteFiles' : 'ocrFiles');
 
     if (purpose === 'ocr' && state.ocrFiles.length) {
       clearFiles('ocr');
@@ -3362,7 +3602,7 @@
     setTimeout(() => input.click(), 0);
   }
 
-  async function pasteImageFromClipboard() {
+  async function pasteImageFromClipboard(purpose = 'ocr') {
     if (!navigator.clipboard?.read) {
       toast('当前浏览器不支持读取剪贴板图片，请使用相册导入。', 'error');
       return;
@@ -3378,6 +3618,12 @@
       }
       if (!files.length) {
         toast('剪贴板里没有图片。', 'error');
+        return;
+      }
+      if (purpose === 'images') {
+        addFiles(files, 'images');
+        render();
+        toast(`已从剪贴板加入 ${files.length} 张截图。`, 'success');
         return;
       }
       captureWorkspaceImportContext();
@@ -3411,7 +3657,7 @@
       toast('识别处理中，暂时不能移除图片。', 'error');
       return;
     }
-    const key = purpose === 'ai' ? 'importFiles' : 'ocrFiles';
+    const key = purpose === 'ai' ? 'importFiles' : (purpose === 'images' ? 'imageNoteFiles' : 'ocrFiles');
     const file = state[key].find((item) => item.id === fileId);
     if (file) URL.revokeObjectURL(file.url);
     state[key] = state[key].filter((item) => item.id !== fileId);
@@ -3432,7 +3678,7 @@
   }
 
   function clearFiles(purpose) {
-    const key = purpose === 'ai' ? 'importFiles' : 'ocrFiles';
+    const key = purpose === 'ai' ? 'importFiles' : (purpose === 'images' ? 'imageNoteFiles' : 'ocrFiles');
     state[key].forEach((file) => URL.revokeObjectURL(file.url));
     state[key] = [];
   }
@@ -3923,7 +4169,16 @@
       if (typeof onProgress === 'function') onProgress(index, file);
       const processedImage = await preprocessImageForOcr(file.url);
       const ocrStartedAt = performance.now();
-      const fullImageText = await recognizeWithLocalEngine(processedImage.rawDataUrl || processedImage.titleDataUrl || processedImage.dataUrl);
+      let fullImageText = await recognizeWithLocalEngine(processedImage.rawDataUrl || processedImage.titleDataUrl || processedImage.dataUrl);
+      // JPEG 输入在个别环境可能识别为空：用无损 PNG 再试一次（只在这张图第一次失败时）
+      if (!String(fullImageText || '').trim() && processedImage.canvas) {
+        try {
+          const pngUrl = processedImage.canvas.toDataURL('image/png');
+          fullImageText = await recognizeWithLocalEngine(pngUrl);
+        } catch (error) {
+          console.warn('PNG 回退识别失败：', error);
+        }
+      }
       if (lastOcrTiming) lastOcrTiming.ocrMs += performance.now() - ocrStartedAt;
       if (index === 0) titleText = fullImageText;
 
@@ -4565,6 +4820,7 @@
         }
         if (lastOcrTiming) lastOcrTiming.preprocessMs = performance.now() - startedAt;
         resolve({
+          canvas,
           dataUrl: rawDataUrl,
           rawDataUrl,
           titleDataUrl: rawDataUrl,
@@ -6129,7 +6385,16 @@
       render();
       toast(`${localEngineLabel()} 本地识别完成。`, 'success');
     } catch (error) {
-      console.error('PaddleOCR-WASM failed:', error);
+      console.error('本地 OCR 失败：', error);
+      if (state.ocrLocalEngine === 'onnx') {
+        // ONNX 模型在国内网络下经常下载失败：自动退回 PaddleOCR-WASM 重试一次
+        setLocalEngine('paddlejs');
+        state.busy = false;
+        state.ocrError = `PP-OCRv4 (ONNX) 加载失败，已自动切回 PaddleOCR-WASM：${error.message}`;
+        render();
+        toast('ONNX 模型加载失败，已自动切回 PaddleOCR-WASM 重试。', 'error');
+        return runPaddleJsOcrRecognition(files);
+      }
       state.busy = false;
       state.ocrError = `${localEngineLabel()} 模型加载或识别失败：${error.message}`;
       render();
@@ -6163,10 +6428,17 @@
       render();
       toast(`PaddleOCR-WASM 本地整理完成，用时 ${((performance.now() - startedAt) / 1000).toFixed(1)} 秒。`, 'success');
     } catch (error) {
-      console.error('PaddleOCR-WASM organize failed:', error);
+      console.error('本地整理失败：', error);
+      if (state.ocrLocalEngine === 'onnx') {
+        setLocalEngine('paddlejs');
+        state.busy = false;
+        render();
+        toast('ONNX 模型加载失败，已自动切回 PaddleOCR-WASM 重试。', 'error');
+        return runPaddleJsAiOrganize(files);
+      }
       state.busy = false;
       render();
-      toast('PaddleOCR-WASM 模型加载失败，可使用 AI 增强识别兜底。', 'error');
+      toast('本地模型加载失败，可使用 AI 增强识别兜底。', 'error');
       return;
     }
   }
@@ -6183,6 +6455,49 @@
     state.ocrEngine = state.ocrLocalEngine;
     const files = state.ocrFiles.map((file) => ({ ...file }));
     return runPaddleJsOcrRecognition(files);
+  }
+
+  // 用一张内置的合成图验证本地识别引擎是否可用，快速区分“引擎坏了”还是“这张图认不出来”
+  async function runLocalEngineSelfTest() {
+    const label = localEngineLabel();
+    const canvas = document.createElement('canvas');
+    canvas.width = 720;
+    canvas.height = 200;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#111111';
+    ctx.font = '56px "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif';
+    ctx.fillText('优记自检', 32, 86);
+    ctx.font = '44px "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif';
+    ctx.fillText('OCR TEST 2026', 32, 160);
+    const dataUrl = canvas.toDataURL('image/png');
+    showModal(`
+      <div class="modal engine-test-modal">
+        <h2>本地引擎自检</h2>
+        <p>正在用内置测试图调用 <strong>${escapeHtml(label)}</strong>，首次使用需要下载模型，请稍候…</p>
+        <div class="engine-test-status" id="engine-test-status">⏳ 识别中…</div>
+        <div class="modal-actions"><button class="btn ghost" data-close-modal>关闭</button></div>
+      </div>
+    `);
+    const status = () => document.getElementById('engine-test-status');
+    const started = performance.now();
+    try {
+      const text = String(await recognizeWithLocalEngine(dataUrl) || '').trim();
+      const ms = ((performance.now() - started) / 1000).toFixed(1);
+      const hit = /优记|自检|OCR|TEST|2026/i.test(text);
+      if (status()) {
+        status().innerHTML = hit
+          ? `<p class="ok">✅ 引擎正常</p><p>识别结果：<code>${escapeHtml(text.replace(/\n/g, ' / '))}</code></p><p>耗时 ${ms}s</p>`
+          : `<p class="warn">⚠️ 引擎已加载，但测试图识别为空或不准</p><p>原始返回：<code>${escapeHtml(text || '(空)')}</code></p><p>耗时 ${ms}s。请把这段结果发给我。</p>`;
+      }
+    } catch (error) {
+      console.error('引擎自检失败：', error);
+      if (status()) {
+        status().innerHTML = `<p class="fail">❌ 引擎加载失败</p><p>${escapeHtml(error?.message || String(error))}</p>
+          <p class="hint">常见原因：模型 CDN 被网络拦截、浏览器禁用了 WebAssembly，或存储空间不足。可先切回 PaddleOCR-WASM，或使用 AI 增强识别。</p>`;
+      }
+    }
   }
 
   async function copyOcrText() {
@@ -6273,6 +6588,7 @@
     const selectId = {
       ai: 'ai-generated-folder',
       ocr: 'ocr-generated-folder',
+      images: 'images-note-folder',
       detail: 'detail-folder'
     }[context];
     const select = selectId ? document.getElementById(selectId) : null;
@@ -6284,6 +6600,7 @@
     }
     if (context === 'ai' && state.aiResult) state.aiResult.folder = name;
     if (context === 'ocr') state.ocrFolder = name;
+    if (context === 'images') state.imageNoteFolder = name;
     if (context === 'detail') state.currentFolderDraft = name;
   }
 
@@ -6843,7 +7160,7 @@
     const assets = await getAllAssetRecords();
     const payload = {
       app: '优记 BestNote',
-      version: '7.24',
+      version: '7.25',
       exportedAt: new Date().toISOString(),
       notes: state.notes,
       deletedNotes: state.deletedNotes,
@@ -7725,7 +8042,17 @@
     }
 
     if (event.target.closest('[data-paste-image]')) {
-      pasteImageFromClipboard();
+      pasteImageFromClipboard('ocr');
+      return;
+    }
+
+    if (event.target.closest('[data-paste-image-images]')) {
+      pasteImageFromClipboard('images');
+      return;
+    }
+
+    if (event.target.closest('[data-images-pick]')) {
+      document.getElementById('images-file-input')?.click();
       return;
     }
 
@@ -8107,13 +8434,13 @@
 
   const selfTestMode = new URLSearchParams(window.location.search).get('selftest') === '1';
   const requestedRoute = new URLSearchParams(window.location.search).get('route');
-  if (['workspace', 'home', 'import', 'ocr', 'paste', 'notes', 'examples', 'history', 'backup'].includes(requestedRoute)) {
+  if (['workspace', 'home', 'import', 'ocr', 'paste', 'images', 'notes', 'examples', 'history', 'backup'].includes(requestedRoute)) {
     state.route = requestedRoute;
   }
 
   if (new URLSearchParams(window.location.search).get('selftest') === '1') {
     window.BestNoteTestApi = {
-      version: '7.24',
+      version: '7.25',
       parseBlocks: (text, options = {}) => buildBlocksForText(text, options),
       filterLines: (text) => filterOcrContentLines(text),
       titles: (text) => generateOcrTitleSuggestions(text),
@@ -8138,6 +8465,31 @@
       noteToExcel: (note) => htmlToExcel(note),
       plainText: (html) => stripHtml(html),
       supportsIndexedDb: Boolean(window.indexedDB),
+      // 渲染冒烟：让自检可以在无浏览器环境下跑遍每个页面，捕获模板异常
+      renderRoute: (route, options = {}) => {
+        if (options.noteId) state.noteId = options.noteId;
+        if (options.sectionSortMode !== undefined) state.sectionSortMode = options.sectionSortMode;
+        state.route = route;
+        render();
+        return (document.getElementById('view-root')?.innerHTML || '').length;
+      },
+      renderAllRoutes: () => {
+        const routes = ['home', 'notes', 'trash', 'note', 'import', 'ocr', 'paste', 'images', 'examples', 'backup', 'history', 'workspace'];
+        const report = [];
+        const previous = state.route;
+        for (const route of routes) {
+          try {
+            state.route = route;
+            render();
+            const length = (document.getElementById('view-root')?.innerHTML || '').length;
+            report.push({ route, ok: true, length });
+          } catch (error) {
+            report.push({ route, ok: false, error: error?.message || String(error) });
+          }
+        }
+        state.route = previous;
+        return report;
+      },
       correctTime: (value) => correctOcrTimeCell(value),
       normalizeTimes: (values) => normalizeOcrTimeSequence(values),
       parseTableText: (text) => parsePaddleJsTableText(text),

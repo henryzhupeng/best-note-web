@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#2f6f68" />
   <meta name="description" content="优记 BestNote - 免注册、本地存储的网页 AI 笔记，把图片、OCR 和粘贴文字整理成结构化笔记。" />
   <title>优记 BestNote · 网页 AI 笔记</title>
-  <link rel="stylesheet" href="./styles.css?v=7.24" />
+  <link rel="stylesheet" href="./styles.css?v=7.25" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="./icon-192.png" type="image/png" />
@@ -29,6 +29,9 @@
         </button>
         <button class="nav-item" data-route="paste">
           <span class="nav-icon">✦</span><span>AI 结构化</span>
+        </button>
+        <button class="nav-item" data-route="images">
+          <span class="nav-icon">▣</span><span>图片笔记</span>
         </button>
         <button class="nav-item" data-route="import">
           <span class="nav-icon">◫</span><span>图片整理</span>
@@ -59,7 +62,7 @@
           </div>
         </div>
         <button class="install-button" type="button" data-install-app>⤓ 安装到手机 / 桌面</button>
-        <p class="version">Web Prototype · v7.24</p>
+        <p class="version">Web Prototype · v7.25</p>
       </div>
     </aside>
 
@@ -98,6 +101,7 @@
     <nav class="bottom-nav" aria-label="移动端导航">
       <button data-route="home"><span>⌂</span><small>首页</small></button>
       <button class="primary-nav" data-route="paste"><span>✦</span><small>AI 结构化</small></button>
+      <button data-route="images"><span>▣</span><small>图片笔记</small></button>
       <button data-route="notes"><span>▤</span><small>笔记</small></button>
     </nav>
   </div>
@@ -107,6 +111,6 @@
   <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
   <div id="modal-root"></div>
 
-  <script src="./app.js?v=7.24"></script>
+  <script src="./app.js?v=7.25"></script>
 </body>
 </html>

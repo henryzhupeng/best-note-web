@@ -114,9 +114,9 @@
       <button class="btn" id="run" disabled>开始 A/B 对比</button>
       <label class="hint">B 列策略
         <select id="mode">
-          <option value="onnx">PP-OCRv4 (ONNX，本地，首次下载约 15MB)</option>
           <option value="enhance">增强预处理（灰度 + 拉伸 + 2×放大）</option>
           <option value="binarize">二值化（Otsu）</option>
+          <option value="onnx">PP-OCRv4 (ONNX，需能访问 HuggingFace，首次下载约 15MB)</option>
         </select>
       </label>
       <button class="btn secondary" id="sample">使用示例图片</button>
