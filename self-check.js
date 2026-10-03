@@ -163,7 +163,7 @@
       }
     },
     {
-      name: 'PaddleOCR-WASM 和 AI 增强兜底配置正确',
+      name: '本地识别引擎与 AI 增强兜底配置正确',
       run(api) {
         const providers = api.aiOcrProviders();
         assert(api.supportsWasm, '当前浏览器不支持 WASM');
@@ -171,16 +171,16 @@
         assert(providers.some((item) => item.name === 'Kimi' && item.url.includes('moonshot.cn')), '缺少 Kimi 入口');
         assert(providers.some((item) => item.name === 'DeepSeek' && item.url.includes('deepseek.com')), '缺少 DeepSeek 入口');
         assert(api.aiOcrPrompt.includes('markdown'), 'AI 提示词缺少 Markdown 要求');
+        assert(!/paddlejs|PaddleOCR-WASM/i.test(String(api.aiOcrPrompt)), 'AI 提示词不应再提到已移除的引擎');
       }
     },
     {
-      name: '本地引擎可选 PaddleOCR-WASM / PP-OCRv4 (ONNX)',
+      name: '本地引擎提供 PP-OCRv4 (ONNX) 与 Tesseract 备用',
       run(api) {
         const engines = api.localEngines();
-        assert(Array.isArray(engines) && engines.length >= 2, '本地引擎列表不完整');
-        assert(engines.includes('PaddleOCR-WASM'), '缺少 PaddleOCR-WASM 引擎');
         assert(engines.includes('PP-OCRv4 (ONNX)'), '缺少 PP-OCRv4 (ONNX) 引擎');
-        assert(api.currentLocalEngine() === 'paddlejs', '默认本地引擎应为 PaddleOCR-WASM');
+        assert(engines.includes('Tesseract'), '缺少 Tesseract 备用引擎');
+        assert(api.currentLocalEngine() === 'onnx', '默认本地引擎应为 PP-OCRv4 (ONNX)');
       }
     },
     {
@@ -223,9 +223,9 @@
       }
     },
     {
-      name: '应用版本为 v7.25',
+      name: '应用版本为 v7.28',
       run(api) {
-        assert(api.version === '7.25', `版本为 ${api.version}`);
+        assert(api.version === '7.28', `版本为 ${api.version}`);
       }
     }
   ];

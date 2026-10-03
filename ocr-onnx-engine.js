@@ -13,23 +13,25 @@
   const DEFAULTS = {
     ortUrl: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js',
     ortWasmPath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/',
+    fetchTimeoutMs: 25000,
     detLimit: 960,
     detThreshold: 0.3,
     boxMinScore: 0.45,
     recHeight: 48,
     recMaxWidth: 320,
+    // 国内网络优先走 hf-mirror / jsDelivr，huggingface.co 放最后；每个来源超时后自动换下一个
     detSources: [
-      'https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx',
-      'https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx'
+      'https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx',
+      'https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx'
     ],
     recSources: [
-      'https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx',
-      'https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx'
+      'https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx',
+      'https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx'
     ],
     dictSources: [
       'https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@release/2.7/ppocr/utils/ppocr_keys_v1.txt',
-      'https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt',
-      'https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ppocr_keys_v1.txt'
+      'https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ppocr_keys_v1.txt',
+      'https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt'
     ]
   };
 
@@ -57,16 +59,22 @@
     return root.ort;
   }
 
-  // 依次尝试多个来源，返回第一个成功的 ArrayBuffer / 文本
+  function fetchWithTimeout(url, timeoutMs) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => controller?.abort(), timeoutMs);
+    return fetch(url, controller ? { signal: controller.signal } : undefined).finally(() => clearTimeout(timer));
+  }
+
+  // 依次尝试多个来源，返回第一个成功的 ArrayBuffer / 文本；每个来源都有超时，避免无限期卡住
   async function fetchFirst(urls, mode) {
     const errors = [];
     for (const url of urls) {
       try {
-        const response = await fetch(url);
+        const response = await fetchWithTimeout(url, config.fetchTimeoutMs || 45000);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return mode === 'text' ? await response.text() : await response.arrayBuffer();
       } catch (error) {
-        errors.push(`${url} -> ${error.message}`);
+        errors.push(`${url} -> ${error.name === 'AbortError' ? '超时' : error.message}`);
       }
     }
     throw new Error(`所有来源均失败：\n${errors.join('\n')}`);

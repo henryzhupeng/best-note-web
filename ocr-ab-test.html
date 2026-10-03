@@ -89,11 +89,12 @@
 
   <section class="card">
     <p class="hint">
-      <span class="badge">PaddleOCR-WASM 本地引擎</span>
+      <span class="badge">本地识别引擎</span>
       <span class="badge warn">不联网、无 Token</span>
       此页只用于诊断，不会写入你的笔记。<br />
-      <strong>A 列</strong>：PaddleOCR-WASM 直接识别原图。<strong>B 列</strong>：可选三种策略 ——
-      PP-OCRv4 (ONNX)、增强预处理、Otsu 二值化；若你注册了 <code>window.BestNoteAltOcr</code>，B 列会优先使用它。
+      <span class="badge">PP-OCRv4 (ONNX) 本地引擎</span>
+      <strong>A 列</strong>：直接识别原图。<strong>B 列</strong>：先做图像增强（增强预处理 / Otsu 二值化）再识别。
+      两列用的是同一个模型，只是输入图像不同 —— 用来判断是「图太糊」还是「模型不认」。
     </p>
 
     <div class="drop" id="drop">
@@ -116,18 +117,17 @@
         <select id="mode">
           <option value="enhance">增强预处理（灰度 + 拉伸 + 2×放大）</option>
           <option value="binarize">二值化（Otsu）</option>
-          <option value="onnx">PP-OCRv4 (ONNX，需能访问 HuggingFace，首次下载约 15MB)</option>
         </select>
       </label>
       <button class="btn secondary" id="sample">使用示例图片</button>
-      <button class="btn ghost" id="preload">预加载 ONNX 模型</button>
+      <button class="btn ghost" id="preload">预加载本地模型</button>
     </div>
     <div class="log" id="log"></div>
   </section>
 
   <section class="cols">
     <div class="card col">
-      <h2>A · 原始识别 <span class="badge">PaddleOCR-WASM</span></h2>
+      <h2>A · 原始识别 <span class="badge">PP-OCRv4 (ONNX)</span></h2>
       <div class="meta" id="metaA">等待识别</div>
       <textarea id="textA" placeholder="A 列结果" spellcheck="false"></textarea>
       <div class="foot">
@@ -163,10 +163,8 @@
 <script>
 (function () {
   const lib = window.BestNoteAbLib;
-  const PADDLE_URL = 'https://cdn.jsdelivr.net/npm/@paddlejs-models/ocr@1.2.4/lib/index.js';
   const $ = (id) => document.getElementById(id);
 
-  let currentFile = null;
   let currentUrl = '';
   let enginePromise = null;
 
@@ -175,21 +173,36 @@
   }
 
   function loadEngine() {
-    if (window.paddlejs?.ocr?.recognize) return window.paddlejs.ocr.init().then(() => window.paddlejs.ocr);
+    if (window.BestNoteOnnxOcr?.recognize) return Promise.resolve(window.BestNoteOnnxOcr);
     if (enginePromise) return enginePromise;
-    enginePromise = new Promise((resolve, reject) => {
+    enginePromise = (async () => {
+      if (!window.BestNoteOnnxOcr?.recognize) {
+        await loadScript('./ocr-onnx-lib.js', 'onnx-lib');
+        await loadScript('./ocr-onnx-engine.js', 'onnx-engine');
+      }
+      if (!window.BestNoteOnnxOcr?.recognize) throw new Error('PP-OCRv4 (ONNX) 引擎未加载');
+      return window.BestNoteOnnxOcr;
+    })().catch((error) => { enginePromise = null; throw error; });
+    return enginePromise;
+  }
+
+  function loadScript(src, flag) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[data-ab-script="${flag}"]`);
+      if (existing) {
+        if (existing.dataset.loaded === 'true') return resolve();
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => reject(new Error(`脚本加载失败：${src}`)), { once: true });
+        return;
+      }
       const script = document.createElement('script');
-      script.src = PADDLE_URL;
+      script.src = src;
       script.async = true;
-      script.onload = () => {
-        const engine = window.paddlejs?.ocr;
-        if (!engine?.recognize) return reject(new Error('PaddleOCR-WASM 初始化失败'));
-        engine.init().then(() => resolve(engine)).catch(reject);
-      };
-      script.onerror = () => reject(new Error('PaddleOCR-WASM 脚本加载失败，请检查网络'));
+      script.dataset.abScript = flag;
+      script.addEventListener('load', () => { script.dataset.loaded = 'true'; resolve(); }, { once: true });
+      script.addEventListener('error', () => reject(new Error(`脚本加载失败：${src}`)), { once: true });
       document.head.appendChild(script);
     });
-    return enginePromise;
   }
 
   function imageFromUrl(url) {
@@ -208,8 +221,9 @@
 
   async function recognizeOriginal(url) {
     const engine = await loadEngine();
-    const img = await imageFromUrl(url);
-    return readText(await engine.recognize(img));
+    setLog('正在加载 ONNX 模型（首次约 15MB，来自 hf-mirror.com）…');
+    const result = await engine.recognize(url);
+    return readText(result);
   }
 
   function drawToCanvas(img, scale) {
@@ -232,62 +246,35 @@
     const ctx = drawToCanvas(img, 2);
     const frame = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
     let gray = lib.toGrayscale(frame);
-    if (mode === 'binarize') {
-      gray = lib.contrastStretch(gray);
-      gray = lib.binarize(gray);
-    } else {
-      gray = lib.contrastStretch(gray);
-    }
+    gray = lib.contrastStretch(gray);
+    if (mode === 'binarize') gray = lib.binarize(gray);
     const rgba = lib.grayscaleToRgba(gray);
     ctx.putImageData(new ImageData(rgba, ctx.canvas.width, ctx.canvas.height), 0, 0);
-    return readText(await engine.recognize(ctx.canvas));
-  }
-
-  function hasAltEngine() {
-    return typeof window.BestNoteAltOcr?.recognize === 'function';
-  }
-
-  function bLabel(mode) {
-    if (hasAltEngine()) return '外部引擎';
-    if (mode === 'onnx') return 'PP-OCRv4 (ONNX)';
-    return mode === 'binarize' ? '二值化预处理' : '增强预处理';
-  }
-
-  async function runB(url, mode) {
-    if (hasAltEngine()) return readText(await window.BestNoteAltOcr.recognize({ url, mode }));
-    if (mode === 'onnx') {
-      if (!window.BestNoteOnnxOcr?.recognize) throw new Error('ONNX 引擎未加载');
-      const result = await window.BestNoteOnnxOcr.recognize(url);
-      return result.text;
-    }
-    return recognizeEnhanced(url, mode);
+    const result = await engine.recognize(ctx.canvas);
+    return readText(result);
   }
 
   function formatMeta(text, ms) {
     const stats = lib.textStats(text);
     const score = lib.qualityScore(text);
-    return {
-      html: `${stats.lines} 行 · ${stats.chars} 字符 · 质量分 <span class="score ${score >= 60 ? 'good' : 'bad'}">${score}</span> · ${(ms / 1000).toFixed(1)}s`,
-      score
-    };
+    return `${stats.lines} 行 · ${stats.chars} 字符 · 质量分 <span class="score ${score >= 60 ? 'good' : 'bad'}">${score}</span> · ${(ms / 1000).toFixed(1)}s`;
   }
 
   async function runCompare() {
     if (!currentUrl) return;
     const mode = $('mode').value;
     $('run').disabled = true;
-    $('engineB').textContent = bLabel(mode);
+    $('engineB').textContent = mode === 'binarize' ? '二值化预处理' : '增强预处理';
     $('metaA').textContent = '识别中…';
     $('metaB').textContent = '识别中…';
-    setLog(mode === 'onnx' ? '正在加载 ONNX 运行时与 PP-OCRv4 模型（首次约 15MB，之后走浏览器缓存）…' : '正在加载本地模型…');
+    setLog('正在加载本地模型…');
     let a = '';
     let b = '';
     try {
       const t0 = performance.now();
       a = lib.normalizeText(await recognizeOriginal(currentUrl));
-      const dtA = performance.now() - t0;
       $('textA').value = a;
-      $('metaA').innerHTML = formatMeta(a, dtA).html;
+      $('metaA').innerHTML = formatMeta(a, performance.now() - t0);
       $('copyA').disabled = !a;
     } catch (error) {
       $('metaA').innerHTML = `<span class="badge err">失败</span> ${error.message}`;
@@ -296,10 +283,9 @@
     try {
       setLog('正在运行 B 列…');
       const t0 = performance.now();
-      b = lib.normalizeText(await runB(currentUrl, mode));
-      const dtB = performance.now() - t0;
+      b = lib.normalizeText(await recognizeEnhanced(currentUrl, mode));
       $('textB').value = b;
-      $('metaB').innerHTML = formatMeta(b, dtB).html;
+      $('metaB').innerHTML = formatMeta(b, performance.now() - t0);
       $('copyB').disabled = !b;
     } catch (error) {
       $('metaB').innerHTML = `<span class="badge err">失败</span> ${error.message}`;
@@ -323,7 +309,6 @@
   function acceptFile(file) {
     if (!file || !file.type.startsWith('image/')) return;
     if (currentUrl.startsWith('blob:')) URL.revokeObjectURL(currentUrl);
-    currentFile = file;
     currentUrl = URL.createObjectURL(file);
     $('thumb').src = currentUrl;
     $('preview').hidden = false;
@@ -379,19 +364,19 @@
     if (item) acceptFile(item.getAsFile());
   });
   $('run').addEventListener('click', runCompare);
-  $('preload').addEventListener('click', async () => {
-    if (!window.BestNoteOnnxOcr?.load) return setLog('ONNX 引擎未加载');
-    setLog('正在下载 onnxruntime-web 与 PP-OCRv4 模型（首次约 15MB）…');
-    try {
-      await window.BestNoteOnnxOcr.load();
-      setLog('ONNX 模型加载成功，可切换到「PP-OCRv4 (ONNX)」进行对比。');
-    } catch (error) {
-      setLog(`ONNX 模型加载失败：\n${error.message}`);
-    }
-  });
   $('sample').addEventListener('click', async () => {
     acceptFile(await makeSample());
     runCompare();
+  });
+  $('preload').addEventListener('click', async () => {
+    setLog('正在下载 onnxruntime-web 与 PP-OCRv4 模型（首次约 15MB，来自 hf-mirror.com）…');
+    try {
+      const engine = await loadEngine();
+      await engine.load();
+      setLog('PP-OCRv4 (ONNX) 模型加载成功，可以开始对比了。');
+    } catch (error) {
+      setLog(`模型加载失败：\n${error.message}`);
+    }
   });
   $('copyA').addEventListener('click', () => navigator.clipboard.writeText($('textA').value).then(() => setLog('已复制 A 列结果')));
   $('copyB').addEventListener('click', () => navigator.clipboard.writeText($('textB').value).then(() => setLog('已复制 B 列结果')));

@@ -1,9 +1,9 @@
-const CACHE_NAME = 'best-note-v7.25';
+const CACHE_NAME = 'best-note-v7.28';
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=7.25',
-  './app.js?v=7.25',
+  './styles.css?v=7.28',
+  './app.js?v=7.28',
   './manifest.json',
   './icon.svg',
   './icon-192.png',
@@ -16,6 +16,38 @@ const SHELL = [
   './ocr-onnx-engine.js',
   './stitch-crop-lib.js'
 ];
+
+// OCR 引擎脚本与模型来自第三方 CDN，浏览器缓存并不可靠（清理缓存后要重新下载十几 MB）。
+// 这里用独立的 Cache Storage 缓存一次，之后即使离线也能直接识别。
+const ENGINE_CACHE = 'best-note-engines-v1';
+const ENGINE_HOSTS = [
+  'cdn.jsdelivr.net',
+  'unpkg.com',
+  'huggingface.co',
+  'hf-mirror.com',
+  'raw.githubusercontent.com',
+  'cdn-lfs.huggingface.co'
+];
+
+function isEngineRequest(url) {
+  if (ENGINE_HOSTS.includes(url.hostname)) return true;
+  if (url.hostname.endsWith('.hf-mirror.com')) return true;
+  return false;
+}
+
+async function cacheFirstEngine(request) {
+  const cache = await caches.open(ENGINE_CACHE);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+  try {
+    const response = await fetch(request);
+    const cacheable = response.ok || (response.type === 'opaque' && request.mode === 'no-cors');
+    if (cacheable) cache.put(request, response.clone()).catch(() => {});
+    return response;
+  } catch (error) {
+    return cached || Promise.reject(error);
+  }
+}
 
 const SHARE_DB_NAME = 'best-note-web-db';
 const SHARE_DB_VERSION = 3;
@@ -80,7 +112,9 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+    caches.keys().then((keys) => Promise.all(
+      keys.filter((key) => key !== CACHE_NAME && key !== ENGINE_CACHE).map((key) => caches.delete(key))
+    ))
   );
   self.clients.claim();
 });
@@ -90,6 +124,10 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (request.method === 'POST' && url.origin === self.location.origin && url.pathname.endsWith('/share-target')) {
     event.respondWith(handleShareTarget(request));
+    return;
+  }
+  if (request.method === 'GET' && url.origin !== self.location.origin && isEngineRequest(url)) {
+    event.respondWith(cacheFirstEngine(request));
     return;
   }
   if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;

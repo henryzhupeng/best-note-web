@@ -5315,7 +5315,7 @@ canvas { max-width: 100%; }
   width: 38px;
   height: 38px;
 }
-/* PaddleOCR-WASM and AI enhancement menu */
+/* AI enhancement menu */
 .wasm-engine-settings {
   display: grid;
   gap: 10px;
@@ -5598,3 +5598,27 @@ canvas { max-width: 100%; }
 .engine-test-status .fail { color: var(--danger); font-weight: 700; }
 .engine-test-status .hint { color: var(--ink-faint); font-size: 12px; }
 .engine-test-status code { word-break: break-all; }
+
+/* ---- v7.25: 引擎自检入口 ---- */
+.local-engine-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+.local-engine-row .local-engine-picker { margin-top: 0; }
+.engine-self-test { white-space: nowrap; }
+.ocr-empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 14px; }
+
+.engine-network-note { margin: 6px 0 0; font-size: 9px; line-height: 1.55; color: var(--ink-faint); }
+
+/* ---- v7.26: 单一本地引擎标识（PaddleOCR-WASM 已移除） ---- */
+.local-engine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
+  border-radius: 999px;
+  background: #fff;
+  color: var(--primary-dark);
+  font-size: 9.5px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.local-engine-badge::before { content: '●'; color: var(--success); font-size: 8px; }
